@@ -2,6 +2,12 @@
 # Environment variables
 .env
 
+# Service Account Key (DO NOT COMMIT)
+service-account-key.json
+*.json
+!package.json
+!package-lock.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -12,9 +18,9 @@ venv/
 # Uploads and Generated content
 static/uploads/*
 static/generated/*
-knowledge_base/*
-# exception: allow keeping .gitkeep in those dirs if we wanted, but for now ignoring all content is safer
-!knowledge_base/.gitkeep
+
+# knowledge_base/* 
+# (Temporarily un-ignored to allow agent access)
 
 # Mac
 .DS_Store
