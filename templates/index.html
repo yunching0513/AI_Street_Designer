@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Street Designer | Transform Your City</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="background-glob"></div>
+    <div class="background-glob-2"></div>
+
+    <main class="container">
+        <header class="header">
+            <div class="logo">
+                <i class="fa-solid fa-city"></i>
+                <h1>Street<span class="highlight">Designer</span></h1>
+            </div>
+            <p class="subtitle">Reimagine your streets with the power of AI.</p>
+        </header>
+
+        <div class="app-interface">
+            <div class="upload-section" id="drop-zone">
+                <input type="file" id="file-input" accept="image/*" hidden>
+                <div class="upload-content" id="upload-content">
+                    <i class="fa-solid fa-cloud-upload-alt upload-icon"></i>
+                    <h3>Upload Street View</h3>
+                    <p>Drag & drop or click to browse</p>
+                </div>
+                <div class="preview-container hidden" id="preview-container">
+                    <img id="image-preview" src="" alt="Preview">
+                    <button class="remove-btn" id="remove-image">
+                        <i class="fa-solid fa-times"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div class="controls-section">
+                <!-- Preset Prompts -->
+                <div class="control-group">
+                    <label>Transformation Style</label>
+                    <div class="grid-options">
+                        <button class="option-card" data-prompt="Widen sidewalks for better walkability">
+                            <i class="fa-solid fa-person-walking"></i>
+                            <span>Widen Sidewalks</span>
+                        </button>
+                        <button class="option-card" data-prompt="Add bus bays and transit priority lanes">
+                            <i class="fa-solid fa-bus"></i>
+                            <span>Bus Bays</span>
+                        </button>
+                        <button class="option-card" data-prompt="Add bike lanes and cycling infrastructure">
+                            <i class="fa-solid fa-bicycle"></i>
+                            <span>Bike Lanes</span>
+                        </button>
+                        <button class="option-card" data-prompt="Increase greenery, add trees and planters">
+                            <i class="fa-solid fa-tree"></i>
+                            <span>Greenery</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Custom Prompt -->
+                <div class="control-group">
+                    <label>Custom Vision</label>
+                    <div class="input-wrapper">
+                        <input type="text" id="custom-prompt" placeholder="E.g., Make it a pedestrian-only zone with cafes...">
+                        <button id="generate-btn" disabled>
+                            Generate <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Result Section -->
+        <div class="result-section hidden" id="result-section">
+            <div class="result-header">
+                <h2>Transformed Vision</h2>
+                <button class="close-result" id="close-result"><i class="fa-solid fa-times"></i></button>
+            </div>
+            <div class="result-image-wrapper">
+                <div class="loading-overlay hidden" id="loading-overlay">
+                    <div class="spinner"></div>
+                    <p>Dreaming up new streets...</p>
+                </div>
+                <img id="result-image" src="" alt="Generated Design">
+            </div>
+        </div>
+    </main>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

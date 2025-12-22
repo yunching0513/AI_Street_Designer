@@ -1,0 +1,20 @@
+
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Uploads and Generated content
+static/uploads/*
+static/generated/*
+knowledge_base/*
+# exception: allow keeping .gitkeep in those dirs if we wanted, but for now ignoring all content is safer
+!knowledge_base/.gitkeep
+
+# Mac
+.DS_Store
