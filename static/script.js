@@ -105,7 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Button enabled if file is there. 
         // Prompt is optional? Or required? Let's say required.
         const hasPrompt = selectedPrompt || customPromptInput.value.trim().length > 0;
-        
+
         generateBtn.disabled = !(hasFile && hasPrompt);
     }
 
@@ -120,7 +120,7 @@ document.addEventListener('DOMContentLoaded', () => {
         resultSection.classList.remove('hidden');
         loadingOverlay.classList.remove('hidden');
         resultImage.classList.add('hidden');
-        
+
         // Prepare Form Data
         const formData = new FormData();
         formData.append('image', selectedFile);
@@ -132,26 +132,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 method: 'POST',
                 body: formData
             });
-            
-            const data = await response.json();
-            
-            // TODO: In real implementation, the backend would return the image URL or base64
-            // For now, we simulate success after the placeholder backend response
-            
-            // Simulate waiting for "processing" if it was real
-            console.log('Backend response:', data);
 
-            // Mock showing the uploaded image as result for now, or a placeholder
-            // In a real app we would use data.image_url
-            // Let's just show the preview again to prove the flow works visually
-            resultImage.src = imagePreview.src; 
-            
-            loadingOverlay.classList.add('hidden');
-            resultImage.classList.remove('hidden');
+            const data = await response.json();
+
+            // Handle backend response
+            if (data.status === 'success' && data.image_url) {
+                console.log('Generation success:', data.image_url);
+                // Add timestamp to prevent browser caching
+                resultImage.src = data.image_url + '?t=' + new Date().getTime();
+
+                loadingOverlay.classList.add('hidden');
+                resultImage.classList.remove('hidden');
+            } else {
+                throw new Error(data.error || 'Unknown error from server');
+            }
 
         } catch (error) {
             console.error('Error:', error);
-            alert('Something went wrong during generation.');
+            alert('Generation failed: ' + error.message);
             resultSection.classList.add('hidden');
         }
     });
