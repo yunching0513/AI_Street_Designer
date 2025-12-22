@@ -294,89 +294,61 @@ def transform_image():
     print(f"Generating with prompt:\n{full_prompt}")
 
     try:
-        # Step 1: Use Gemini 2.0 to analyze the reference image and create an enhanced prompt
-        # This ensures the AI "sees" the original image and understands what to modify
-        print("Analyzing reference image with Gemini 2.0...")
+        # Use Gemini 3 Pro Image Preview for TRUE image-to-image transformation
+        # This model accepts the input image and generates a modified version
+        print(f"Transforming image with gemini-3-pro-image-preview (TRUE image-to-image)...")
         
-        analysis_prompt_parts = [
-            types.Part.from_text(text=f"""You are an expert AI urban planner analyzing a street view for transformation.
+        # Build the prompt with both text instruction and reference image
+        prompt_text = f"""Transform this street view image with the following changes:
 
-USER'S TRANSFORMATION REQUEST:
 {full_prompt}
 
-INSTRUCTIONS:
-You will create a HIGHLY DETAILED image generation prompt for Imagen that preserves the exact composition.
+CRITICAL INSTRUCTIONS:
+- PRESERVE all buildings, their architecture, facades, and details EXACTLY as they are
+- PRESERVE the camera perspective, angle, and viewpoint EXACTLY
+- PRESERVE the lighting, weather, and atmospheric conditions
+- ONLY modify street-level elements as requested (vehicles, lanes, sidewalks, greenery, etc.)
+- Maintain photorealistic quality
+- Keep the exact same composition
 
-FIRST, describe in EXTREME DETAIL what you see in this image:
-- EXACT building heights, styles, colors, materials, and architectural features
-- PRECISE window patterns, roof lines, facade details
-- EXACT street width, perspective angle, and viewing distance
-- Current lane markings, crosswalks, traffic signals
-- Lighting conditions, shadows, time of day, weather
+The result should look like the same street, same buildings, same view - just with the requested street changes applied."""
 
-THEN, specify the transformation while preserving ALL architectural elements:
-- What street elements to ADD
-- What street elements to MODIFY  
-- What street elements to REMOVE
-
-OUTPUT FORMAT:
-Create a single, comprehensive prompt that:
-1. Starts with "Photorealistic street view showing [exact building descriptions]..."
-2. Specifies the EXACT preservation of all buildings and their details
-3. Describes the street transformation clearly
-4. Maintains the exact camera angle and perspective
-5. Is optimized for Imagen 4 to preserve maximum fidelity to the original composition
-
-Be EXTREMELY specific about building details to help Imagen recreate them accurately."""),
+        if negative_prompt:
+            prompt_text += f"\n\nDO NOT include: {negative_prompt}"
+        
+        transformation_parts = [
+            types.Part.from_text(text=prompt_text),
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
         ]
         
-        analysis_response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',
-            contents=[types.Content(role='user', parts=analysis_prompt_parts)]
+        response = client.models.generate_content(
+            model='gemini-3-pro-image-preview',
+            contents=[types.Content(role='user', parts=transformation_parts)]
         )
         
-        detailed_prompt = analysis_response.text
-        print(f"Detailed generation prompt created (length: {len(detailed_prompt)} chars)")
+        print(f"Image transformation complete!")
         
-        # Step 2: Generate the transformed image with Imagen 4
-        # Using detailed prompt to maximize composition preservation
-        if negative_prompt:
-            detailed_prompt += f"\n\nCRITICAL: DO NOT INCLUDE: {negative_prompt}"
+        # Extract the generated image from response
+        generated_image_data = None
+        if hasattr(response, 'candidates') and response.candidates:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'inline_data') and part.inline_data:
+                    generated_image_data = part.inline_data.data
+                    break
         
-        print("Generating transformed image with Imagen 4 (enhanced prompting)...")
-        config = types.GenerateImagesConfig(
-            number_of_images=1,
-            safety_filter_level="block_low_and_above",
-            person_generation="allow_adult",
-            aspect_ratio="16:9"  # Match typical street view aspect ratio
-        )
-             
-        response = client.models.generate_images(
-            model='imagen-4.0-generate-001',
-            prompt=detailed_prompt,
-            config=config
-        )
-        
-        if response.generated_images:
-            # Save the image
-            generated_filename = "gen_" + filename
-            generated_filepath = os.path.join(app.config['GENERATED_FOLDER'], generated_filename)
+        if not generated_image_data:
+            return jsonify({'error': 'No image generated in response'}), 500
             
-            # The new SDK might return bytes or a PIL image. Typically response.generated_images[0].image.image_bytes
-            # Let's inspect or assume it returns an object with save method or bytes.
-            # Usually types.GeneratedImage has 'image' property which is types.Image, containing 'image_bytes'.
-            
-            image_bytes = response.generated_images[0].image.image_bytes
-            with open(generated_filepath, "wb") as f:
-                f.write(image_bytes)
-                
-            return jsonify({
-                'status': 'success',
-                'image_url': url_for('static', filename=f'generated/{generated_filename}')
-            })
-        else:
-            return jsonify({'error': 'No image generated'}), 500
+        # Save the generated image
+        generated_filename = "gen_" + filename
+        generated_filepath = os.path.join(app.config['GENERATED_FOLDER'], generated_filename)
+        with open(generated_filepath, "wb") as f:
+            f.write(generated_image_data)
+        
+        return jsonify({
+            'status': 'success',
+            'image_url': url_for('static', filename=f'generated/{generated_filename}')
+        })
 
     except Exception as e:
         print(f"Error generating image: {e}")
