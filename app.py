@@ -362,16 +362,18 @@ The result should look like the same street, same buildings, same view - just wi
         
         if not generated_image_data:
             return jsonify({'error': 'No image generated in response'}), 500
-            
-        # Save the generated image
-        generated_filename = "gen_" + filename
-        generated_filepath = os.path.join(app.config['GENERATED_FOLDER'], generated_filename)
-        with open(generated_filepath, "wb") as f:
-            f.write(generated_image_data)
         
+        # In Vercel serverless environment, /tmp files can't be accessed via static routes
+        # So we return the image as base64 data URL instead
+        print(f"Image generation complete, returning base64 data")
+        
+        # Convert bytes to base64 string
+        image_base64 = base64.b64encode(generated_image_data).decode('utf-8')
+        
+        # Return as data URL
         return jsonify({
             'status': 'success',
-            'image_url': url_for('static', filename=f'generated/{generated_filename}')
+            'image_url': f'data:image/png;base64,{image_base64}'
         })
 
     except Exception as e:
