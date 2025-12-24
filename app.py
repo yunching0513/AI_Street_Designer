@@ -5,6 +5,8 @@ import time
 import sys
 import mimetypes
 import base64
+import json
+import tempfile
 
 # Python 3.9 compatibility patch
 if sys.version_info < (3, 10):
@@ -26,9 +28,14 @@ import io
 load_dotenv()
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'static/uploads'
-app.config['GENERATED_FOLDER'] = 'static/generated'
-app.config['KNOWLEDGE_BASE_FOLDER'] = 'knowledge_base'
+
+# Vercel serverless environment: use /tmp for writable storage
+# Note: /tmp is ephemeral and cleared between invocations
+app.config['UPLOAD_FOLDER'] = '/tmp/uploads'
+app.config['GENERATED_FOLDER'] = '/tmp/generated'
+app.config['KNOWLEDGE_BASE_FOLDER'] = 'knowledge_base'  # Read-only, bundled with deployment
+
+# Ensure directories exist (they may not persist between serverless invocations)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['GENERATED_FOLDER'], exist_ok=True)
 os.makedirs(app.config['KNOWLEDGE_BASE_FOLDER'], exist_ok=True)
@@ -37,15 +44,31 @@ os.makedirs(app.config['KNOWLEDGE_BASE_FOLDER'], exist_ok=True)
 GOOGLE_CLOUD_PROJECT = os.getenv('GOOGLE_CLOUD_PROJECT')
 GOOGLE_CLOUD_LOCATION = os.getenv('GOOGLE_CLOUD_LOCATION', 'us-central1')
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+GOOGLE_APPLICATION_CREDENTIALS_JSON = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 
 client = None
+credentials_file_path = None
+
+# Handle Vercel environment: create temp file from JSON string
+if GOOGLE_APPLICATION_CREDENTIALS_JSON and not GOOGLE_APPLICATION_CREDENTIALS:
+    try:
+        # Create a temporary file for the credentials
+        temp_creds = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        temp_creds.write(GOOGLE_APPLICATION_CREDENTIALS_JSON)
+        temp_creds.close()
+        credentials_file_path = temp_creds.name
+        print(f"✅ Created temporary credentials file from JSON environment variable")
+    except Exception as e:
+        print(f"❌ Failed to create credentials file from JSON: {e}")
+elif GOOGLE_APPLICATION_CREDENTIALS:
+    credentials_file_path = GOOGLE_APPLICATION_CREDENTIALS
 
 # Try Vertex AI first (supports edit_image)
-if GOOGLE_CLOUD_PROJECT and GOOGLE_APPLICATION_CREDENTIALS:
+if GOOGLE_CLOUD_PROJECT and credentials_file_path:
     try:
         # Set the credentials environment variable for google-auth
-        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = GOOGLE_APPLICATION_CREDENTIALS
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = credentials_file_path
         
         client = genai.Client(
             vertexai=True,
@@ -55,7 +78,7 @@ if GOOGLE_CLOUD_PROJECT and GOOGLE_APPLICATION_CREDENTIALS:
         print(f"✅ Using Vertex AI")
         print(f"   Project: {GOOGLE_CLOUD_PROJECT}")
         print(f"   Location: {GOOGLE_CLOUD_LOCATION}")
-        print(f"   Credentials: {GOOGLE_APPLICATION_CREDENTIALS}")
+        print(f"   Credentials: {credentials_file_path}")
     except Exception as e:
         print(f"❌ Failed to initialize Vertex AI Client: {e}")
         print(f"   Falling back to Gemini API if available...")
@@ -71,7 +94,8 @@ if client is None and GOOGLE_API_KEY:
 if client is None:
     print("❌ No valid credentials found!")
     print("   Please set either:")
-    print("   - GOOGLE_CLOUD_PROJECT + GOOGLE_APPLICATION_CREDENTIALS (for Vertex AI)")
+    print("   - GOOGLE_CLOUD_PROJECT + GOOGLE_APPLICATION_CREDENTIALS_JSON (for Vertex AI on Vercel)")
+    print("   - GOOGLE_CLOUD_PROJECT + GOOGLE_APPLICATION_CREDENTIALS (for Vertex AI locally)")
     print("   - GOOGLE_API_KEY (for Gemini API)")
 
 # Cache for knowledge base summary
