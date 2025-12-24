@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/static/(.*)",
+      "dest": "/static/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.py"
+    }
+  ],
+  "env": {
+    "GOOGLE_CLOUD_PROJECT": "@google_cloud_project",
+    "GOOGLE_CLOUD_LOCATION": "@google_cloud_location",
+    "GOOGLE_APPLICATION_CREDENTIALS": "@google_application_credentials",
+    "GOOGLE_API_KEY": "@google_api_key"
+  },
+  "regions": ["iad1"]
+}
