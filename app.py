@@ -28,14 +28,9 @@ import io
 load_dotenv()
 
 app = Flask(__name__)
-
-# Vercel serverless environment: use /tmp for writable storage
-# Note: /tmp is ephemeral and cleared between invocations
-app.config['UPLOAD_FOLDER'] = '/tmp/uploads'
-app.config['GENERATED_FOLDER'] = '/tmp/generated'
-app.config['KNOWLEDGE_BASE_FOLDER'] = 'knowledge_base'  # Read-only, bundled with deployment
-
-# Ensure directories exist (they may not persist between serverless invocations)
+app.config['UPLOAD_FOLDER'] = 'static/uploads'
+app.config['GENERATED_FOLDER'] = 'static/generated'
+app.config['KNOWLEDGE_BASE_FOLDER'] = 'knowledge_base'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['GENERATED_FOLDER'], exist_ok=True)
 os.makedirs(app.config['KNOWLEDGE_BASE_FOLDER'], exist_ok=True)
@@ -51,18 +46,8 @@ client = None
 credentials_file_path = None
 
 # Handle Vercel environment: create temp file from JSON string
-if GOOGLE_APPLICATION_CREDENTIALS_JSON and not GOOGLE_APPLICATION_CREDENTIALS:
-    try:
-        # Create a temporary file for the credentials
-        temp_creds = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-        temp_creds.write(GOOGLE_APPLICATION_CREDENTIALS_JSON)
-        temp_creds.close()
-        credentials_file_path = temp_creds.name
-        print(f"✅ Created temporary credentials file from JSON environment variable")
-    except Exception as e:
-        print(f"❌ Failed to create credentials file from JSON: {e}")
-elif GOOGLE_APPLICATION_CREDENTIALS:
-    credentials_file_path = GOOGLE_APPLICATION_CREDENTIALS
+# (Removed for Render deployment)
+credentials_file_path = GOOGLE_APPLICATION_CREDENTIALS
 
 # Try Vertex AI first (supports edit_image)
 if GOOGLE_CLOUD_PROJECT and credentials_file_path:
@@ -362,18 +347,16 @@ The result should look like the same street, same buildings, same view - just wi
         
         if not generated_image_data:
             return jsonify({'error': 'No image generated in response'}), 500
+            
+        # Save the generated image
+        generated_filename = "gen_" + filename
+        generated_filepath = os.path.join(app.config['GENERATED_FOLDER'], generated_filename)
+        with open(generated_filepath, "wb") as f:
+            f.write(generated_image_data)
         
-        # In Vercel serverless environment, /tmp files can't be accessed via static routes
-        # So we return the image as base64 data URL instead
-        print(f"Image generation complete, returning base64 data")
-        
-        # Convert bytes to base64 string
-        image_base64 = base64.b64encode(generated_image_data).decode('utf-8')
-        
-        # Return as data URL
         return jsonify({
             'status': 'success',
-            'image_url': f'data:image/png;base64,{image_base64}'
+            'image_url': url_for('static', filename=f'generated/{generated_filename}')
         })
 
     except Exception as e:
