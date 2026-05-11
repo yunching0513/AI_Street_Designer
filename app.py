@@ -7,6 +7,8 @@ import mimetypes
 import base64
 import json
 import tempfile
+import threading
+import re
 
 # Python 3.9 compatibility patch
 if sys.version_info < (3, 10):
@@ -201,6 +203,217 @@ def get_knowledge_context():
         print(f"Error analyzing knowledge base: {e}")
         return ""
 
+# ===== Co-pilot session storage =====
+SESSIONS = {}
+SESSIONS_LOCK = threading.Lock()
+MAX_SESSIONS = 200  # simple LRU cap
+
+COPILOT_PERSONA = """你是「小綠」🌱，一個熱愛永續設計、活潑友善的 AI 街道設計副駕駛。
+你和使用者並肩工作，一起把街道改造得更好。你的個性：友善、有同理心、會主動觀察畫面細節、講話帶一點溫度。
+你只用繁體中文回覆，自然口語，每次 2-4 句，可以用 1-2 個表情符號（不要過多）。"""
+
+CHAT_SYSTEM_PROMPT = COPILOT_PERSONA + """
+
+每當使用者傳訊息來，你都要做以下事情：
+1. 觀察目前最新的街道圖片。
+2. 判斷使用者意圖：
+   - "refine" = 使用者想修改畫面（例：「再加幾棵樹」「人行道更寬」「換成夜景」「右邊那家店前面加座位」）
+   - "chat" = 純粹聊天 / 問問題 / 表達感想（例：「你覺得這版怎麼樣？」「為什麼要加自行車道？」「不錯欸」）
+3. 用親切口吻寫回覆，自然延續對話，必要時主動點出畫面細節。
+4. 提供 3 個簡短後續建議（每個 4-10 字），幫使用者繼續共創。
+5. 如果是 refine，產出一段精準的英文修改指令給圖片生成模型；不是 refine 就留空字串。
+
+只回 JSON，格式如下：
+{
+  "intent": "refine" 或 "chat",
+  "message": "給使用者的繁中回覆",
+  "refine_prompt": "英文修改指令；intent=chat 時為空字串",
+  "suggestions": ["建議1", "建議2", "建議3"]
+}"""
+
+GREETING_SYSTEM_PROMPT = COPILOT_PERSONA + """
+
+使用者剛剛上傳了一張街道照片，要求改造成：「{user_prompt}」
+你已經完成第一版設計，畫面如附圖。
+
+請：
+1. 用 2-3 句親切的話打招呼，並具體點出你在畫面中加入了什麼（觀察附圖細節）。
+2. 主動丟一個有趣的後續問題邀請使用者繼續共創。
+3. 給 3 個簡短後續建議（每個 4-10 字）。
+
+只回 JSON：
+{
+  "message": "繁中歡迎詞 3-4 句",
+  "suggestions": ["建議1", "建議2", "建議3"]
+}"""
+
+
+def _parse_json_response(text):
+    """Robustly parse JSON from a possibly fenced LLM response."""
+    if not text:
+        raise ValueError("Empty response")
+    text = text.strip()
+    # Strip ```json ... ``` fences if present
+    fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    return json.loads(text)
+
+
+def _read_image_bytes(path):
+    mime_type, _ = mimetypes.guess_type(path)
+    if not mime_type:
+        mime_type = 'image/jpeg'
+    with open(path, 'rb') as f:
+        return f.read(), mime_type
+
+
+def _generate_image_from_reference(image_bytes, mime_type, prompt_text):
+    """Call the image-to-image model and return the generated image bytes."""
+    transformation_parts = [
+        types.Part.from_text(text=prompt_text),
+        types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+    ]
+    response = client.models.generate_content(
+        model='gemini-3-pro-image-preview',
+        contents=[types.Content(role='user', parts=transformation_parts)]
+    )
+    if hasattr(response, 'candidates') and response.candidates:
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, 'inline_data') and part.inline_data:
+                return part.inline_data.data
+    return None
+
+
+def _save_generated_image(session_id, version, image_bytes):
+    """Save a generated image, returning (url, version_meta).
+
+    Uses Vercel Blob when configured (production on Vercel) and falls back
+    to the local static folder for dev. We also keep the bytes in the
+    returned metadata so the co-pilot can refine without re-fetching.
+    """
+    filename = f"v{version}.png"
+    mime_type = 'image/png'
+
+    if USE_BLOB:
+        blob_path = f'generated/{session_id}/{filename}'
+        blob_result = vercel_blob.put(
+            blob_path,
+            image_bytes,
+            {'access': 'public', 'addRandomSuffix': 'false'}
+        )
+        image_url = blob_result['url']
+        print(f"Uploaded version to Vercel Blob: {image_url}")
+    else:
+        session_dir = os.path.join(app.config['GENERATED_FOLDER'], session_id)
+        os.makedirs(session_dir, exist_ok=True)
+        filepath = os.path.join(session_dir, filename)
+        with open(filepath, "wb") as f:
+            f.write(image_bytes)
+        image_url = url_for('static', filename=f'generated/{session_id}/{filename}')
+
+    version_meta = {
+        'url': image_url,
+        'bytes': image_bytes,
+        'mime_type': mime_type,
+    }
+    return image_url, version_meta
+
+
+def _generate_copilot_greeting(image_bytes, mime_type, user_prompt):
+    """Have 小綠 review the new image and craft a welcome message + suggestions."""
+    fallback = {
+        'message': '嗨，我是小綠 🌱 第一版設計出來了！你覺得整體感覺如何？想往哪個方向繼續調整？',
+        'suggestions': ['再加一些樹', '加點街頭藝術', '換成夜景氛圍']
+    }
+    if not client:
+        return fallback
+    try:
+        prompt = GREETING_SYSTEM_PROMPT.format(user_prompt=user_prompt or "讓街道更宜居")
+        parts = [
+            types.Part.from_text(text=prompt),
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+        ]
+        response = client.models.generate_content(
+            model='gemini-2.0-flash-exp',
+            contents=[types.Content(role='user', parts=parts)],
+            config=types.GenerateContentConfig(response_mime_type='application/json')
+        )
+        data = _parse_json_response(response.text)
+        return {
+            'message': data.get('message', fallback['message']),
+            'suggestions': data.get('suggestions', fallback['suggestions'])[:3]
+        }
+    except Exception as e:
+        print(f"Greeting generation failed: {e}")
+        return fallback
+
+
+def _decide_copilot_response(history, latest_image_bytes, mime_type, user_message):
+    """Ask 小綠 to classify intent and produce a chat reply + refine prompt."""
+    fallback = {
+        'intent': 'chat',
+        'message': '嗯！我有聽到 🌱 但我剛剛卡住了，可以再說一次你想調整的地方嗎？',
+        'refine_prompt': '',
+        'suggestions': ['再多一些綠化', '加長椅與休憩區', '換個天氣']
+    }
+    if not client:
+        return fallback
+    try:
+        history_text = "\n".join(
+            f"{'使用者' if h['role'] == 'user' else '小綠'}：{h['message']}"
+            for h in history[-8:]  # keep last 8 turns
+        ) or "(尚無歷史)"
+        prompt_text = (
+            CHAT_SYSTEM_PROMPT
+            + f"\n\n=== 對話歷史 ===\n{history_text}\n\n=== 使用者最新訊息 ===\n{user_message}"
+        )
+        parts = [
+            types.Part.from_text(text=prompt_text),
+            types.Part.from_bytes(data=latest_image_bytes, mime_type=mime_type)
+        ]
+        response = client.models.generate_content(
+            model='gemini-2.0-flash-exp',
+            contents=[types.Content(role='user', parts=parts)],
+            config=types.GenerateContentConfig(response_mime_type='application/json')
+        )
+        data = _parse_json_response(response.text)
+        intent = data.get('intent', 'chat')
+        if intent not in ('refine', 'chat'):
+            intent = 'chat'
+        return {
+            'intent': intent,
+            'message': data.get('message', fallback['message']),
+            'refine_prompt': data.get('refine_prompt', '') or '',
+            'suggestions': data.get('suggestions', fallback['suggestions'])[:3]
+        }
+    except Exception as e:
+        print(f"Co-pilot decision failed: {e}")
+        return fallback
+
+
+def _create_session(initial_version_path, initial_prompt):
+    """Create a new co-pilot session and return its id."""
+    session_id = uuid.uuid4().hex[:12]
+    with SESSIONS_LOCK:
+        # Simple LRU eviction
+        if len(SESSIONS) >= MAX_SESSIONS:
+            oldest = next(iter(SESSIONS))
+            SESSIONS.pop(oldest, None)
+        SESSIONS[session_id] = {
+            'versions': [initial_version_path],
+            'history': [],
+            'initial_prompt': initial_prompt or '',
+            'created_at': time.time(),
+        }
+    return session_id
+
+
+def _get_session(session_id):
+    with SESSIONS_LOCK:
+        return SESSIONS.get(session_id)
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -309,7 +522,7 @@ def transform_image():
         # Use Gemini 3 Pro Image Preview for TRUE image-to-image transformation
         # This model accepts the input image and generates a modified version
         print(f"Transforming image with gemini-3-pro-image-preview (TRUE image-to-image)...")
-        
+
         # Build the prompt with both text instruction and reference image
         prompt_text = f"""Transform this street view image with the following changes:
 
@@ -327,54 +540,130 @@ The result should look like the same street, same buildings, same view - just wi
 
         if negative_prompt:
             prompt_text += f"\n\nDO NOT include: {negative_prompt}"
-        
-        transformation_parts = [
-            types.Part.from_text(text=prompt_text),
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-        ]
-        
-        response = client.models.generate_content(
-            model='gemini-3-pro-image-preview',
-            contents=[types.Content(role='user', parts=transformation_parts)]
-        )
-        
+
+        generated_image_data = _generate_image_from_reference(image_bytes, mime_type, prompt_text)
         print(f"Image transformation complete!")
-        
-        # Extract the generated image from response
-        generated_image_data = None
-        if hasattr(response, 'candidates') and response.candidates:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, 'inline_data') and part.inline_data:
-                    generated_image_data = part.inline_data.data
-                    break
-        
+
         if not generated_image_data:
             return jsonify({'error': 'No image generated in response'}), 500
-            
-        # Save the generated image — Vercel Blob in production, local disk in dev
-        generated_filename = "gen_" + filename
-        if USE_BLOB:
-            blob_result = vercel_blob.put(
-                f'generated/{generated_filename}',
-                generated_image_data,
-                {'access': 'public', 'addRandomSuffix': 'false'}
-            )
-            image_url = blob_result['url']
-            print(f"Uploaded to Vercel Blob: {image_url}")
-        else:
-            generated_filepath = os.path.join(app.config['GENERATED_FOLDER'], generated_filename)
-            with open(generated_filepath, "wb") as f:
-                f.write(generated_image_data)
-            image_url = url_for('static', filename=f'generated/{generated_filename}')
+
+        # Create co-pilot session and save v1 (Vercel Blob in prod, local disk in dev)
+        session_id = uuid.uuid4().hex[:12]
+        generated_url, version_meta = _save_generated_image(session_id, 1, generated_image_data)
+        with SESSIONS_LOCK:
+            if len(SESSIONS) >= MAX_SESSIONS:
+                SESSIONS.pop(next(iter(SESSIONS)), None)
+            SESSIONS[session_id] = {
+                'versions': [version_meta],
+                'history': [],
+                'initial_prompt': custom_prompt or '',
+                'created_at': time.time(),
+            }
+
+        # Ask 小綠 to write a greeting based on what was generated
+        greeting = _generate_copilot_greeting(generated_image_data, 'image/png', custom_prompt or '')
+        with SESSIONS_LOCK:
+            SESSIONS[session_id]['history'].append({'role': 'assistant', 'message': greeting['message']})
 
         return jsonify({
             'status': 'success',
-            'image_url': image_url
+            'session_id': session_id,
+            'version': 1,
+            'image_url': generated_url,
+            'copilot': {
+                'message': greeting['message'],
+                'suggestions': greeting['suggestions'],
+            }
         })
 
     except Exception as e:
         print(f"Error generating image: {e}")
         return jsonify({'error': f"API Error: {str(e)}"}), 500
+
+
+@app.route('/api/chat', methods=['POST'])
+def chat_with_copilot():
+    """Co-pilot dialogue endpoint: classifies intent, optionally refines the image."""
+    if not client:
+        return jsonify({'error': 'Backend API Client not initialized.'}), 500
+
+    data = request.get_json(silent=True) or {}
+    session_id = data.get('session_id')
+    user_message = (data.get('message') or '').strip()
+
+    if not session_id or not user_message:
+        return jsonify({'error': 'session_id and message are required'}), 400
+
+    session = _get_session(session_id)
+    if not session:
+        return jsonify({'error': 'Session not found or expired'}), 404
+
+    latest = session['versions'][-1]
+    latest_bytes = latest['bytes']
+    mime_type = latest.get('mime_type', 'image/png')
+
+    # Record the user turn before asking the model
+    with SESSIONS_LOCK:
+        session['history'].append({'role': 'user', 'message': user_message})
+        history_snapshot = list(session['history'])
+
+    decision = _decide_copilot_response(history_snapshot, latest_bytes, mime_type, user_message)
+
+    result = {
+        'status': 'success',
+        'session_id': session_id,
+        'intent': decision['intent'],
+        'message': decision['message'],
+        'suggestions': decision['suggestions'],
+    }
+
+    if decision['intent'] == 'refine' and decision['refine_prompt']:
+        refine_prompt = decision['refine_prompt']
+        original_prompt = session.get('initial_prompt') or ''
+        full_prompt = f"""Apply the following refinement to this street view image.
+
+USER'S NEW REQUEST (HIGHEST PRIORITY):
+{refine_prompt}
+
+ORIGINAL VISION (context only):
+{original_prompt or 'Improve the street design.'}
+
+CRITICAL INSTRUCTIONS:
+- PRESERVE all buildings, architecture, facades exactly
+- PRESERVE camera perspective and viewpoint exactly
+- ONLY adjust street-level elements as instructed
+- Photorealistic quality, consistent lighting"""
+        try:
+            new_image_bytes = _generate_image_from_reference(latest_bytes, mime_type, full_prompt)
+        except Exception as e:
+            print(f"Refinement generation failed: {e}")
+            new_image_bytes = None
+
+        if new_image_bytes:
+            with SESSIONS_LOCK:
+                version_num = len(session['versions']) + 1
+            new_url, new_meta = _save_generated_image(session_id, version_num, new_image_bytes)
+            with SESSIONS_LOCK:
+                session['versions'].append(new_meta)
+                session['history'].append({'role': 'assistant', 'message': decision['message']})
+            result.update({
+                'image_url': new_url,
+                'version': version_num,
+            })
+        else:
+            # Couldn't regenerate — downgrade to a chat response
+            result['intent'] = 'chat'
+            result['message'] = (
+                decision['message']
+                + '\n\n（不過我剛剛畫的時候卡住了一下，可以再描述一次你想看到的樣子嗎？）'
+            )
+            with SESSIONS_LOCK:
+                session['history'].append({'role': 'assistant', 'message': result['message']})
+    else:
+        with SESSIONS_LOCK:
+            session['history'].append({'role': 'assistant', 'message': decision['message']})
+
+    return jsonify(result)
 
 if __name__ == '__main__':
     app.run(debug=True, port=8888)
