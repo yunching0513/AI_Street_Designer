@@ -24,16 +24,26 @@ from dotenv import load_dotenv
 from PIL import Image
 import io
 
+try:
+    import vercel_blob
+except ImportError:
+    vercel_blob = None
+
 # Load environment variables
 load_dotenv()
+
+# Use Vercel Blob when a token is available (production on Vercel).
+# Otherwise fall back to local static folders for dev.
+USE_BLOB = bool(os.environ.get('BLOB_READ_WRITE_TOKEN')) and vercel_blob is not None
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 app.config['GENERATED_FOLDER'] = 'static/generated'
 app.config['KNOWLEDGE_BASE_FOLDER'] = 'knowledge_base'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs(app.config['GENERATED_FOLDER'], exist_ok=True)
-os.makedirs(app.config['KNOWLEDGE_BASE_FOLDER'], exist_ok=True)
+
+if not USE_BLOB:
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    os.makedirs(app.config['GENERATED_FOLDER'], exist_ok=True)
 
 # Configure Vertex AI Client
 GOOGLE_CLOUD_PROJECT = os.getenv('GOOGLE_CLOUD_PROJECT')
@@ -208,26 +218,19 @@ def transform_image():
     if not file or file.filename == '':
         return jsonify({'error': 'Invalid file'}), 400
 
-    # Save original image
+    # Read original image bytes directly (avoids writing to read-only FS on Vercel)
     filename = str(uuid.uuid4()) + "_" + file.filename
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(filepath)
-    
-    # Read and encode the image for inline use (Vertex AI doesn't support File API)
-    print(f"Preparing reference image: {filepath}")
+    print(f"Preparing reference image: {filename}")
     try:
-        # Detect mime type
-        mime_type, _ = mimetypes.guess_type(filepath)
+        mime_type, _ = mimetypes.guess_type(file.filename)
         if not mime_type:
             mime_type = 'image/jpeg'  # default fallback
-        
-        # Read image as bytes and encode to base64
-        with open(filepath, "rb") as f:
-            image_bytes = f.read()
+
+        image_bytes = file.read()
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
-        
+
         print(f"Image prepared (size: {len(image_bytes)} bytes, mime: {mime_type})")
-        
+
     except Exception as e:
         print(f"Error preparing reference image: {e}")
         return jsonify({'error': f'Failed to prepare image: {str(e)}'}), 500
@@ -348,15 +351,25 @@ The result should look like the same street, same buildings, same view - just wi
         if not generated_image_data:
             return jsonify({'error': 'No image generated in response'}), 500
             
-        # Save the generated image
+        # Save the generated image — Vercel Blob in production, local disk in dev
         generated_filename = "gen_" + filename
-        generated_filepath = os.path.join(app.config['GENERATED_FOLDER'], generated_filename)
-        with open(generated_filepath, "wb") as f:
-            f.write(generated_image_data)
-        
+        if USE_BLOB:
+            blob_result = vercel_blob.put(
+                f'generated/{generated_filename}',
+                generated_image_data,
+                {'access': 'public', 'addRandomSuffix': 'false'}
+            )
+            image_url = blob_result['url']
+            print(f"Uploaded to Vercel Blob: {image_url}")
+        else:
+            generated_filepath = os.path.join(app.config['GENERATED_FOLDER'], generated_filename)
+            with open(generated_filepath, "wb") as f:
+                f.write(generated_image_data)
+            image_url = url_for('static', filename=f'generated/{generated_filename}')
+
         return jsonify({
             'status': 'success',
-            'image_url': url_for('static', filename=f'generated/{generated_filename}')
+            'image_url': image_url
         })
 
     except Exception as e:
