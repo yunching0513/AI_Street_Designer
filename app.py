@@ -98,6 +98,51 @@ if client is None:
 # Cache for knowledge base summary
 KNOWLEDGE_CONTEXT_CACHE = None
 
+# ===== Taiwan design knowledge base (curated markdown) =====
+TAIWAN_KB_PATH = os.path.join('knowledge_base', 'taiwan_design_principles.md')
+_TAIWAN_KB_CACHE = None  # tuple (style_intro, positive_cues, negative_cues) or None
+
+def load_taiwan_knowledge():
+    """Read taiwan_design_principles.md once and extract the parts that should
+    be injected into image-generation prompts.
+
+    Returns (style_intro, positive_cues, negative_cues). Each may be an empty
+    string if the file is missing or the section can't be parsed.
+    """
+    global _TAIWAN_KB_CACHE
+    if _TAIWAN_KB_CACHE is not None:
+        return _TAIWAN_KB_CACHE
+
+    path = os.path.join(app.root_path, TAIWAN_KB_PATH)
+    if not os.path.exists(path):
+        print(f"⚠️  Taiwan knowledge file not found: {path}")
+        _TAIWAN_KB_CACHE = ('', '', '')
+        return _TAIWAN_KB_CACHE
+
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            md = f.read()
+    except Exception as e:
+        print(f"⚠️  Failed to read Taiwan knowledge file: {e}")
+        _TAIWAN_KB_CACHE = ('', '', '')
+        return _TAIWAN_KB_CACHE
+
+    # Section: "## 整體風格與台灣脈絡" -> brief style intro (Chinese, sets tone)
+    intro_m = re.search(r'##\s*整體風格與台灣脈絡\s*\n(.*?)(?=\n##\s|\n---)', md, re.DOTALL)
+    style_intro = intro_m.group(1).strip() if intro_m else ''
+
+    # Section 12: quick reference card (English short prompts)
+    pos_m = re.search(r'##\s*12\.[^\n]*\n(.*?)(?=\n##\s|\Z)', md, re.DOTALL)
+    positive_cues = pos_m.group(1).strip() if pos_m else ''
+
+    # Section 13: negative prompts
+    neg_m = re.search(r'##\s*13\.[^\n]*\n(.*?)(?=\n##\s|\Z)', md, re.DOTALL)
+    negative_cues = neg_m.group(1).strip() if neg_m else ''
+
+    print(f"✅ Loaded Taiwan KB: intro={len(style_intro)}c, +cues={len(positive_cues)}c, -cues={len(negative_cues)}c")
+    _TAIWAN_KB_CACHE = (style_intro, positive_cues, negative_cues)
+    return _TAIWAN_KB_CACHE
+
 def get_knowledge_context():
     """
     Analyzes all files in the knowledge_base folder using Gemini 1.5 Flash.
@@ -448,10 +493,16 @@ def transform_image():
         print(f"Error preparing reference image: {e}")
         return jsonify({'error': f'Failed to prepare image: {str(e)}'}), 500
     
-    # Get Knowledge context (temporarily disabled for Vertex AI compatibility)
-    # knowledge_context = get_knowledge_context()
-    knowledge_context = ""
-    print("⚠️  Knowledge base context disabled for Vertex AI compatibility")
+    # Load Taiwan human-centered street design knowledge (curated markdown).
+    # Style intro + the english "quick reference card" go into the prompt;
+    # the negative-cue section gets merged into negative_prompt below.
+    kb_style_intro, kb_positive_cues, kb_negative_cues = load_taiwan_knowledge()
+    knowledge_context_parts = []
+    if kb_style_intro:
+        knowledge_context_parts.append("[Overall Taiwan Street Style]\n" + kb_style_intro)
+    if kb_positive_cues:
+        knowledge_context_parts.append("[Concrete Visual Rules]\n" + kb_positive_cues)
+    knowledge_context = "\n\n".join(knowledge_context_parts)
     
     # Try to match specific Design Prompt from Libraries
     # (Checking against keys in our new dictionaries)
@@ -485,6 +536,14 @@ def transform_image():
                 
     except ImportError as e:
         print(f"Could not import prompt libraries: {e}")
+
+    # Merge curated Taiwan negative cues into whatever negative_prompt the
+    # preset matcher produced (if any). Preset wins on top, KB cues append.
+    if kb_negative_cues:
+        if negative_prompt:
+            negative_prompt = f"{negative_prompt}\n{kb_negative_cues}"
+        else:
+            negative_prompt = kb_negative_cues
 
     # Construct prompt
     if specialized_prompt:
