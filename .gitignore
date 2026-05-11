@@ -1,6 +1,8 @@
 
 # Environment variables
 .env
+.env.*
+!.env.example
 
 # Service Account Key (DO NOT COMMIT)
 service-account-key.json
