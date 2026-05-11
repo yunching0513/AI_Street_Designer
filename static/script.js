@@ -1,3 +1,39 @@
+// Resize and re-encode large images so the request body stays under Vercel's 4.5MB limit.
+async function compressImage(file, maxDimension = 1920, quality = 0.85) {
+    if (file.size < 3 * 1024 * 1024) return file;
+
+    const img = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = reject;
+            image.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+
+    let { width, height } = img;
+    if (Math.max(width, height) > maxDimension) {
+        const scale = maxDimension / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+
+    return await new Promise((resolve) => {
+        canvas.toBlob((blob) => {
+            const baseName = file.name.replace(/\.[^.]+$/, '');
+            resolve(new File([blob], `${baseName}.jpg`, { type: 'image/jpeg' }));
+        }, 'image/jpeg', quality);
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     // Elements
     const dropZone = document.getElementById('drop-zone');
@@ -121,26 +157,35 @@ document.addEventListener('DOMContentLoaded', () => {
         loadingOverlay.classList.remove('hidden');
         resultImage.classList.add('hidden');
 
-        // Prepare Form Data
-        const formData = new FormData();
-        formData.append('image', selectedFile);
-        formData.append('prompt_type', selectedPrompt ? 'preset' : 'custom');
-        formData.append('custom_prompt', effectivePrompt);
-
         try {
+            const uploadFile = await compressImage(selectedFile);
+            console.log(`Upload size: ${(selectedFile.size / 1024 / 1024).toFixed(2)}MB → ${(uploadFile.size / 1024 / 1024).toFixed(2)}MB`);
+
+            const formData = new FormData();
+            formData.append('image', uploadFile);
+            formData.append('prompt_type', selectedPrompt ? 'preset' : 'custom');
+            formData.append('custom_prompt', effectivePrompt);
+
             const response = await fetch('/api/transform', {
                 method: 'POST',
                 body: formData
             });
 
-            const data = await response.json();
+            const rawText = await response.text();
+            let data;
+            try {
+                data = JSON.parse(rawText);
+            } catch (parseErr) {
+                throw new Error(`Server returned non-JSON (HTTP ${response.status}): ${rawText.slice(0, 200)}`);
+            }
 
-            // Handle backend response
+            if (!response.ok) {
+                throw new Error(data.error || `HTTP ${response.status}`);
+            }
+
             if (data.status === 'success' && data.image_url) {
                 console.log('Generation success:', data.image_url);
-                // Add timestamp to prevent browser caching
                 resultImage.src = data.image_url + '?t=' + new Date().getTime();
-
                 loadingOverlay.classList.add('hidden');
                 resultImage.classList.remove('hidden');
             } else {
