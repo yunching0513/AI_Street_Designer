@@ -6,31 +6,37 @@
     <title>AI Street Designer | Transform Your City</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <!-- Font Awesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
-    <div class="background-glob"></div>
-    <div class="background-glob-2"></div>
+    <div class="bg-blob blob-mint"></div>
+    <div class="bg-blob blob-peach"></div>
+    <div class="bg-blob blob-lavender"></div>
+    <span class="bg-sparkle sparkle-1">✨</span>
+    <span class="bg-sparkle sparkle-2">🌸</span>
+    <span class="bg-sparkle sparkle-3">☁️</span>
+    <span class="bg-sparkle sparkle-4">🌿</span>
 
     <main class="container">
         <header class="header">
             <div class="logo">
-                <i class="fa-solid fa-city"></i>
+                <span class="logo-emoji">🌱</span>
                 <h1>Street<span class="highlight">Designer</span></h1>
+                <span class="logo-emoji">✨</span>
             </div>
-            <p class="subtitle">Reimagine your streets with the power of AI.</p>
+            <p class="subtitle">和小綠一起，把你家門口的街道變得更可愛 💕</p>
         </header>
 
         <div class="app-interface">
             <div class="upload-section" id="drop-zone">
                 <input type="file" id="file-input" accept="image/*" hidden>
                 <div class="upload-content" id="upload-content">
-                    <i class="fa-solid fa-cloud-upload-alt upload-icon"></i>
-                    <h3>Upload Street View</h3>
-                    <p>Drag & drop or click to browse</p>
+                    <div class="upload-icon">📸</div>
+                    <h3>把街景照片丟過來</h3>
+                    <p>拖曳上傳，或點一下選圖 ✨</p>
                 </div>
                 <div class="preview-container hidden" id="preview-container">
                     <img id="image-preview" src="" alt="Preview">
@@ -43,52 +49,81 @@
             <div class="controls-section">
                 <!-- Preset Prompts -->
                 <div class="control-group">
-                    <label>Transformation Style</label>
+                    <label>選一個改造風格</label>
                     <div class="grid-options">
                         <button class="option-card" data-prompt="Widen sidewalks for better walkability">
-                            <i class="fa-solid fa-person-walking"></i>
-                            <span>Widen Sidewalks</span>
+                            <span class="option-emoji">🚶</span>
+                            <span>加寬人行道</span>
                         </button>
                         <button class="option-card" data-prompt="Add bus bays and transit priority lanes">
-                            <i class="fa-solid fa-bus"></i>
-                            <span>Bus Bays</span>
+                            <span class="option-emoji">🚌</span>
+                            <span>公車彎月台</span>
                         </button>
                         <button class="option-card" data-prompt="Add bike lanes and cycling infrastructure">
-                            <i class="fa-solid fa-bicycle"></i>
-                            <span>Bike Lanes</span>
+                            <span class="option-emoji">🚲</span>
+                            <span>自行車道</span>
                         </button>
                         <button class="option-card" data-prompt="Increase greenery, add trees and planters">
-                            <i class="fa-solid fa-tree"></i>
-                            <span>Greenery</span>
+                            <span class="option-emoji">🌳</span>
+                            <span>綠意盎然</span>
                         </button>
                     </div>
                 </div>
 
                 <!-- Custom Prompt -->
                 <div class="control-group">
-                    <label>Custom Vision</label>
+                    <label>或是自己許個願 💭</label>
                     <div class="input-wrapper">
-                        <input type="text" id="custom-prompt" placeholder="E.g., Make it a pedestrian-only zone with cafes...">
+                        <input type="text" id="custom-prompt" placeholder="例如：步行區、有咖啡店和露天座位...">
                         <button id="generate-btn" disabled>
-                            Generate <i class="fa-solid fa-wand-magic-sparkles"></i>
+                            開始變變變 <span>✨</span>
                         </button>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Result Section -->
+        <!-- Result Section: image + co-pilot chat -->
         <div class="result-section hidden" id="result-section">
             <div class="result-header">
-                <h2>Transformed Vision</h2>
-                <button class="close-result" id="close-result"><i class="fa-solid fa-times"></i></button>
-            </div>
-            <div class="result-image-wrapper">
-                <div class="loading-overlay hidden" id="loading-overlay">
-                    <div class="spinner"></div>
-                    <p>Dreaming up new streets...</p>
+                <div class="result-title">
+                    <h2>✨ 你的新街道</h2>
+                    <span class="round-badge" id="round-badge">共創回合 1</span>
                 </div>
-                <img id="result-image" src="" alt="Generated Design">
+                <button class="close-result" id="close-result" aria-label="關閉">✕</button>
+            </div>
+
+            <div class="result-body">
+                <!-- Left: image + version strip -->
+                <div class="result-image-column">
+                    <div class="result-image-wrapper">
+                        <div class="loading-overlay hidden" id="loading-overlay">
+                            <div class="cute-spinner">
+                                <span>🌱</span>
+                            </div>
+                            <p id="loading-text">小綠正在動筆中...</p>
+                        </div>
+                        <img id="result-image" src="" alt="Generated Design">
+                    </div>
+                    <div class="version-strip" id="version-strip"></div>
+                </div>
+
+                <!-- Right: co-pilot chat -->
+                <aside class="copilot-panel" id="copilot-panel">
+                    <div class="copilot-header">
+                        <div class="copilot-avatar">🌱</div>
+                        <div class="copilot-meta">
+                            <strong>小綠</strong>
+                            <span>你的街道設計小夥伴</span>
+                        </div>
+                    </div>
+                    <div class="copilot-messages" id="copilot-messages"></div>
+                    <div class="copilot-suggestions" id="copilot-suggestions"></div>
+                    <form class="copilot-input" id="copilot-input-form">
+                        <input type="text" id="copilot-input" placeholder="跟小綠聊聊：再多一些樹、人行道更寬..." autocomplete="off">
+                        <button type="submit" id="copilot-send" aria-label="送出">💌</button>
+                    </form>
+                </aside>
             </div>
         </div>
     </main>
