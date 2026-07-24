@@ -106,6 +106,24 @@ document.addEventListener('DOMContentLoaded', () => {
         reader.readAsDataURL(file);
     }
 
+    // Auto-load a street view handed over from the schoolzone map's
+    // makeover album (…/?img=<street view static url>&road=…). The image
+    // is fetched through our backend proxy (/api/fetch_street) to dodge
+    // CORS and the Maps key's referrer restriction.
+    (() => {
+        const params = new URLSearchParams(location.search);
+        const img = params.get('img');
+        if (!img || !img.startsWith('https://maps.googleapis.com/maps/api/streetview')) return;
+        fetch('/api/fetch_street?url=' + encodeURIComponent(img))
+            .then(r => { if (!r.ok) throw new Error('fetch failed'); return r.blob(); })
+            .then(b => {
+                const road = params.get('road') || '';
+                const name = (road ? road : 'streetview') + '.jpg';
+                handleFile(new File([b], name, { type: b.type || 'image/jpeg' }));
+            })
+            .catch(() => {});   // fall back to manual upload silently
+    })();
+
     function resetFile() {
         selectedFile = null;
         fileInput.value = '';
