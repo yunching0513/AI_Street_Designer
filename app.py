@@ -251,6 +251,10 @@ def get_knowledge_context():
 # ===== Co-pilot session storage =====
 SESSIONS = {}
 SESSIONS_LOCK = threading.Lock()
+
+# One generation at a time: concurrent multi-MB generations on the 512 MB
+# free instance OOM-kill the worker mid-request (gunicorn's bare 500 page).
+GEN_LOCK = threading.BoundedSemaphore(1)
 MAX_SESSIONS = 200  # simple LRU cap
 
 COPILOT_PERSONA = """你是「小綠」🌱，一個熱愛永續設計、活潑友善的 AI 街道設計副駕駛。
@@ -582,7 +586,6 @@ def transform_image():
             mime_type = 'image/jpeg'  # default fallback
 
         image_bytes = file.read()
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
 
         print(f"Image prepared (size: {len(image_bytes)} bytes, mime: {mime_type})")
 
@@ -697,7 +700,12 @@ The result should look like the same street, same buildings, same view - just wi
         if negative_prompt:
             prompt_text += f"\n\nDO NOT include: {negative_prompt}"
 
-        generated_image_data = _generate_image_from_reference(image_bytes, mime_type, prompt_text, resolution=resolution)
+        if not GEN_LOCK.acquire(blocking=False):
+            return jsonify({'error': '另一張圖正在生成中，免費主機一次只能畫一張——等它畫完再試一次 🌱'}), 429
+        try:
+            generated_image_data = _generate_image_from_reference(image_bytes, mime_type, prompt_text, resolution=resolution)
+        finally:
+            GEN_LOCK.release()
         print(f"Image transformation complete!")
 
         if not generated_image_data:
@@ -790,12 +798,18 @@ CRITICAL INSTRUCTIONS:
 - PRESERVE camera perspective and viewpoint exactly
 - ONLY adjust street-level elements as instructed
 - Photorealistic quality, consistent lighting"""
-        try:
-            new_image_bytes = _generate_image_from_reference(
-                latest_bytes, mime_type, full_prompt,
-                resolution=session.get('resolution', '2K'))
-        except Exception as e:
-            print(f"Refinement generation failed: {e}")
+        if GEN_LOCK.acquire(blocking=False):
+            try:
+                new_image_bytes = _generate_image_from_reference(
+                    latest_bytes, mime_type, full_prompt,
+                    resolution=session.get('resolution', '2K'))
+            except Exception as e:
+                print(f"Refinement generation failed: {e}")
+                new_image_bytes = None
+            finally:
+                GEN_LOCK.release()
+        else:
+            print("Refinement skipped: another generation in progress")
             new_image_bytes = None
 
         if new_image_bytes:
