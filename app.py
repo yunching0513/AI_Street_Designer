@@ -382,6 +382,21 @@ def _save_generated_image(session_id, version, image_bytes):
 # or region the next takes over, and the real error is logged either way.
 COPILOT_TEXT_MODELS = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash']
 
+def _shrink_for_llm(image_bytes, max_dim=1024):
+    """Downscale an image before showing it to the text model — 2K/4K PNGs
+    waste tokens and can blow the inline request-size limit, which kills the
+    whole chat call."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        img.thumbnail((max_dim, max_dim))
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=82)
+        return buf.getvalue(), 'image/jpeg'
+    except Exception as e:
+        print(f"shrink_for_llm failed ({e}); sending original bytes")
+        return image_bytes, 'image/png'
+
+
 def _copilot_generate_json(parts):
     """generate_content with a model fallback chain; returns parsed JSON."""
     last_err = None
@@ -408,10 +423,13 @@ def _generate_copilot_greeting(image_bytes, mime_type, user_prompt):
     if not client:
         return fallback
     try:
-        prompt = GREETING_SYSTEM_PROMPT.format(user_prompt=user_prompt or "讓街道更宜居")
+        # str.replace, NOT str.format — the template's JSON example braces
+        # make .format() raise KeyError on every single call.
+        prompt = GREETING_SYSTEM_PROMPT.replace('{user_prompt}', user_prompt or "讓街道更宜居")
+        small_bytes, small_mime = _shrink_for_llm(image_bytes)
         parts = [
             types.Part.from_text(text=prompt),
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+            types.Part.from_bytes(data=small_bytes, mime_type=small_mime)
         ]
         data = _copilot_generate_json(parts)
         return {
@@ -442,9 +460,10 @@ def _decide_copilot_response(history, latest_image_bytes, mime_type, user_messag
             CHAT_SYSTEM_PROMPT
             + f"\n\n=== 對話歷史 ===\n{history_text}\n\n=== 使用者最新訊息 ===\n{user_message}"
         )
+        small_bytes, small_mime = _shrink_for_llm(latest_image_bytes)
         parts = [
             types.Part.from_text(text=prompt_text),
-            types.Part.from_bytes(data=latest_image_bytes, mime_type=mime_type)
+            types.Part.from_bytes(data=small_bytes, mime_type=small_mime)
         ]
         data = _copilot_generate_json(parts)
         intent = data.get('intent', 'chat')
