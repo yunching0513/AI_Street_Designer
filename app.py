@@ -370,10 +370,14 @@ def _save_generated_image(session_id, version, image_bytes):
             f.write(image_bytes)
         image_url = url_for('static', filename=f'generated/{session_id}/{filename}')
 
+    # Keep only a SHRUNK copy in session memory. Storing full-res bytes
+    # (multi-MB at 2K/4K) across up to 200 LRU sessions OOMs the 512 MB
+    # instance and gets workers killed mid-request (bare 500/502s).
+    small_bytes, small_mime = _shrink_for_llm(image_bytes)
     version_meta = {
         'url': image_url,
-        'bytes': image_bytes,
-        'mime_type': mime_type,
+        'bytes': small_bytes,
+        'mime_type': small_mime,
     }
     return image_url, version_meta
 
@@ -505,6 +509,17 @@ def _get_session(session_id):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.errorhandler(Exception)
+def _unhandled_error(e):
+    """Return JSON (and log the traceback) instead of Flask's bare HTML 500,
+    so the frontend can show a real message and Render logs show the cause."""
+    import traceback
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return e
+    traceback.print_exc()
+    return jsonify({'error': f'{e.__class__.__name__}: {str(e)[:200]}'}), 500
 
 @app.route('/api/diag')
 def diag():
