@@ -19,7 +19,7 @@ if sys.version_info < (3, 10):
     except ImportError:
         pass
 
-from flask import Flask, render_template, request, jsonify, url_for
+from flask import Flask, render_template, request, jsonify, url_for, Response
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -462,6 +462,28 @@ def _get_session(session_id):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/api/fetch_street')
+def fetch_street():
+    # Server-side fetch of a Street View Static image handed over from the
+    # schoolzone map (?img=... on the front page). Browser-side fetch would
+    # hit CORS and the Maps key's referrer restriction; the backend has
+    # neither problem. Restricted to the Street View Static endpoint so this
+    # can't be used as an open proxy.
+    url = request.args.get('url', '')
+    if not url.startswith('https://maps.googleapis.com/maps/api/streetview'):
+        return jsonify({'error': 'unsupported url'}), 400
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, headers={'User-Agent': 'ai-street-designer'})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = r.read()
+            ctype = r.headers.get('Content-Type', 'image/jpeg')
+        if not ctype.startswith('image/'):
+            return jsonify({'error': 'not an image'}), 502
+        return Response(data, mimetype=ctype)
+    except Exception as e:
+        return jsonify({'error': f'fetch failed: {e}'}), 502
 
 @app.route('/api/transform', methods=['POST'])
 def transform_image():
