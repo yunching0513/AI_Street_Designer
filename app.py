@@ -9,6 +9,20 @@ import json
 import tempfile
 import threading
 import re
+import gc
+import shutil
+import resource
+
+# Bumped by hand on each deploy-worthy change — /api/diag reports it, so we
+# can tell at a glance whether the running instance actually has a fix.
+CODE_VERSION = '2026-07-25-mem1'
+
+def rss_mb():
+    """Resident memory of this worker, in MB (Linux)."""
+    try:
+        return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+    except Exception:
+        return -1
 
 # Python 3.9 compatibility patch
 if sys.version_info < (3, 10):
@@ -255,6 +269,7 @@ SESSIONS_LOCK = threading.Lock()
 # One generation at a time: concurrent multi-MB generations on the 512 MB
 # free instance OOM-kill the worker mid-request (gunicorn's bare 500 page).
 GEN_LOCK = threading.BoundedSemaphore(1)
+GEN_LOCK_HELD = False
 MAX_SESSIONS = 200  # simple LRU cap
 
 COPILOT_PERSONA = """你是「小綠」🌱，一個熱愛永續設計、活潑友善的 AI 街道設計副駕駛。
@@ -369,6 +384,7 @@ def _save_generated_image(session_id, version, image_bytes):
     else:
         session_dir = os.path.join(app.config['GENERATED_FOLDER'], session_id)
         os.makedirs(session_dir, exist_ok=True)
+        _prune_generated_dirs()
         filepath = os.path.join(session_dir, filename)
         with open(filepath, "wb") as f:
             f.write(image_bytes)
@@ -389,6 +405,22 @@ def _save_generated_image(session_id, version, image_bytes):
 # Text models for 小綠, tried in order — if one is unavailable on this key
 # or region the next takes over, and the real error is logged either way.
 COPILOT_TEXT_MODELS = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash']
+
+def _prune_generated_dirs(keep=40):
+    """Generated images otherwise pile up until the instance is redeployed;
+    keep only the newest few session folders."""
+    try:
+        base = app.config['GENERATED_FOLDER']
+        dirs = [os.path.join(base, d) for d in os.listdir(base)]
+        dirs = [d for d in dirs if os.path.isdir(d)]
+        if len(dirs) <= keep:
+            return
+        dirs.sort(key=lambda d: os.path.getmtime(d), reverse=True)
+        for d in dirs[keep:]:
+            shutil.rmtree(d, ignore_errors=True)
+    except Exception as e:
+        print(f"prune generated dirs failed: {e}")
+
 
 def _shrink_for_llm(image_bytes, max_dim=1024):
     """Downscale an image before showing it to the text model — 2K/4K PNGs
@@ -529,7 +561,18 @@ def _unhandled_error(e):
 def diag():
     # Model health check: which of 小綠's text models actually answer on this
     # deployment's key/region. Open this in a browser when chat misbehaves.
-    out = {'client': bool(client), 'image_model': 'gemini-3-pro-image-preview', 'text_models': {}}
+    out = {
+        'code_version': CODE_VERSION,
+        'rss_mb': rss_mb(),
+        'sessions': len(SESSIONS),
+        'generating': GEN_LOCK_HELD,
+        'client': bool(client),
+        'image_model': 'gemini-3-pro-image-preview',
+        'text_models': {},
+    }
+    if request.args.get('models') != '1':
+        out['note'] = 'add ?models=1 to also ping the text models'
+        return jsonify(out)
     if client:
         for m in COPILOT_TEXT_MODELS:
             try:
@@ -702,11 +745,16 @@ The result should look like the same street, same buildings, same view - just wi
 
         if not GEN_LOCK.acquire(blocking=False):
             return jsonify({'error': '另一張圖正在生成中，免費主機一次只能畫一張——等它畫完再試一次 🌱'}), 429
+        global GEN_LOCK_HELD
+        GEN_LOCK_HELD = True
+        print(f"[mem] before generate: {rss_mb()} MB (resolution={resolution})")
         try:
             generated_image_data = _generate_image_from_reference(image_bytes, mime_type, prompt_text, resolution=resolution)
         finally:
+            GEN_LOCK_HELD = False
             GEN_LOCK.release()
-        print(f"Image transformation complete!")
+        print(f"[mem] after generate: {rss_mb()} MB, "
+              f"image={len(generated_image_data or b'')/1024/1024:.1f} MB")
 
         if not generated_image_data:
             return jsonify({'error': 'No image generated in response'}), 500
@@ -725,8 +773,15 @@ The result should look like the same street, same buildings, same view - just wi
                 'created_at': time.time(),
             }
 
-        # Ask 小綠 to write a greeting based on what was generated
-        greeting = _generate_copilot_greeting(generated_image_data, 'image/png', custom_prompt or '')
+        # Full-res bytes are on disk/blob and a shrunk copy is in the session —
+        # drop the big buffer before the greeting call so peak RSS stays low.
+        del generated_image_data
+        gc.collect()
+        print(f"[mem] after release: {rss_mb()} MB")
+
+        # Ask 小綠 to write a greeting, reusing the already-shrunk copy
+        greeting = _generate_copilot_greeting(
+            version_meta['bytes'], version_meta.get('mime_type', 'image/jpeg'), custom_prompt or '')
         with SESSIONS_LOCK:
             SESSIONS[session_id]['history'].append({'role': 'assistant', 'message': greeting['message']})
 
