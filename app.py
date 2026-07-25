@@ -235,7 +235,7 @@ def get_knowledge_context():
         
         print("Consulting Gemini 2.0 Flash Exp for Knowledge Base Summary...")
         response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',
+            model='gemini-2.5-flash',
             contents=[types.Content(parts=prompt_parts)]
         )
         summary = response.text
@@ -313,16 +313,29 @@ def _read_image_bytes(path):
         return f.read(), mime_type
 
 
-def _generate_image_from_reference(image_bytes, mime_type, prompt_text):
-    """Call the image-to-image model and return the generated image bytes."""
+def _generate_image_from_reference(image_bytes, mime_type, prompt_text, resolution='2K'):
+    """Call the image-to-image model and return the generated image bytes.
+
+    resolution: '1K' | '2K' | '4K' — Nano Banana Pro output size. Falls back
+    to the model default if this SDK build lacks ImageConfig.
+    """
     transformation_parts = [
         types.Part.from_text(text=prompt_text),
         types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
     ]
-    response = client.models.generate_content(
+    kwargs = dict(
         model='gemini-3-pro-image-preview',
         contents=[types.Content(role='user', parts=transformation_parts)]
     )
+    if resolution in ('1K', '2K', '4K'):
+        try:
+            kwargs['config'] = types.GenerateContentConfig(
+                response_modalities=['TEXT', 'IMAGE'],
+                image_config=types.ImageConfig(image_size=resolution),
+            )
+        except Exception as e:
+            print(f"ImageConfig unavailable ({e}); using model default resolution")
+    response = client.models.generate_content(**kwargs)
     if hasattr(response, 'candidates') and response.candidates:
         for part in response.candidates[0].content.parts:
             if hasattr(part, 'inline_data') and part.inline_data:
@@ -380,7 +393,7 @@ def _generate_copilot_greeting(image_bytes, mime_type, user_prompt):
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
         ]
         response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',
+            model='gemini-2.5-flash',
             contents=[types.Content(role='user', parts=parts)],
             config=types.GenerateContentConfig(response_mime_type='application/json')
         )
@@ -418,7 +431,7 @@ def _decide_copilot_response(history, latest_image_bytes, mime_type, user_messag
             types.Part.from_bytes(data=latest_image_bytes, mime_type=mime_type)
         ]
         response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',
+            model='gemini-2.5-flash',
             contents=[types.Content(role='user', parts=parts)],
             config=types.GenerateContentConfig(response_mime_type='application/json')
         )
@@ -494,6 +507,9 @@ def transform_image():
     
     file = request.files['image']
     custom_prompt = request.form.get('custom_prompt')
+    resolution = request.form.get('resolution', '2K')
+    if resolution not in ('1K', '2K', '4K'):
+        resolution = '2K'
     
     if not file or file.filename == '':
         return jsonify({'error': 'Invalid file'}), 400
@@ -622,7 +638,7 @@ The result should look like the same street, same buildings, same view - just wi
         if negative_prompt:
             prompt_text += f"\n\nDO NOT include: {negative_prompt}"
 
-        generated_image_data = _generate_image_from_reference(image_bytes, mime_type, prompt_text)
+        generated_image_data = _generate_image_from_reference(image_bytes, mime_type, prompt_text, resolution=resolution)
         print(f"Image transformation complete!")
 
         if not generated_image_data:
@@ -638,6 +654,7 @@ The result should look like the same street, same buildings, same view - just wi
                 'versions': [version_meta],
                 'history': [],
                 'initial_prompt': custom_prompt or '',
+                'resolution': resolution,
                 'created_at': time.time(),
             }
 
@@ -715,7 +732,9 @@ CRITICAL INSTRUCTIONS:
 - ONLY adjust street-level elements as instructed
 - Photorealistic quality, consistent lighting"""
         try:
-            new_image_bytes = _generate_image_from_reference(latest_bytes, mime_type, full_prompt)
+            new_image_bytes = _generate_image_from_reference(
+                latest_bytes, mime_type, full_prompt,
+                resolution=session.get('resolution', '2K'))
         except Exception as e:
             print(f"Refinement generation failed: {e}")
             new_image_bytes = None

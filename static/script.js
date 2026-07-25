@@ -172,6 +172,8 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('image', uploadFile);
             formData.append('prompt_type', selectedPrompt ? 'preset' : 'custom');
             formData.append('custom_prompt', effectivePrompt);
+            const resSel = document.getElementById('resolution-select');
+            formData.append('resolution', resSel ? resSel.value : '2K');
 
             const response = await fetch('/api/transform', {
                 method: 'POST',
