@@ -1,44 +1,46 @@
 :root {
-    /* Kawaii pastel palette */
-    --bg: #FFF6E9;
-    --bg-soft: #FFEFDC;
+    /* こども本の森 palette — paper base, forest-green spirit colour,
+       small pink/yellow accents; low saturation, high warmth. */
+    --bg: #FCFBF6;               /* paper */
+    --bg-soft: #F3EFE4;          /* linen */
     --surface: #FFFFFF;
-    --surface-soft: #FFF8F0;
-    --surface-cream: #FFE9D2;
+    --surface-soft: #FCFBF6;
+    --surface-cream: #EAE3D2;    /* hemp */
 
-    --primary: #7BC8A4;          /* mint green */
-    --primary-deep: #4FA77E;
-    --primary-soft: #D6F0E2;
+    --primary: #62A968;          /* forest green */
+    --primary-deep: #4C8C58;     /* forest deep */
+    --primary-soft: #E9F1E6;
 
-    --accent: #FFB088;           /* peach */
-    --accent-deep: #FF8A65;
-    --accent-soft: #FFD8C4;
+    --accent: #62A968;           /* green leads; accents stay small */
+    --accent-deep: #2E5339;      /* deep forest, dark blocks */
+    --accent-soft: #E9F1E6;
 
-    --pink: #FFA6C1;
-    --pink-soft: #FFD6E2;
-    --lavender: #C9B6F2;
-    --lavender-soft: #E5DBF9;
-    --sky: #A8DCFF;
-    --sky-soft: #DCEEFF;
-    --yellow: #FFD66B;
+    --pink: #E89AB0;
+    --pink-soft: #FBE3EA;
+    --lavender: #8FB9C9;         /* sky-blue takes the old lavender slots */
+    --lavender-soft: #E6EFF3;
+    --sky: #8FB9C9;
+    --sky-soft: #E6EFF3;
+    --yellow: #E6CF3E;
 
-    --text: #4A3F35;             /* warm dark brown */
-    --text-soft: #8B7B6B;
-    --text-light: #B8A89A;
-    --border: #F0E0CB;
-    --border-soft: #FCEFDD;
+    --text: #211F18;             /* ink */
+    --text-soft: #6A665A;        /* concrete grey */
+    --text-light: #B4AF9F;
+    --border: #D8D1BF;
+    --border-soft: #EAE3D2;
 
-    --radius-xl: 32px;
-    --radius-lg: 24px;
-    --radius-md: 18px;
-    --radius-sm: 12px;
-    --radius-pill: 999px;
+    --radius-xl: 20px;
+    --radius-lg: 18px;           /* cards & images: 18, never square */
+    --radius-md: 14px;           /* inputs: 14 */
+    --radius-sm: 10px;
+    --radius-pill: 9999px;
 
-    --shadow-soft: 0 8px 24px rgba(255, 138, 101, 0.12), 0 4px 8px rgba(123, 200, 164, 0.08);
-    --shadow-pop: 0 14px 32px rgba(255, 138, 101, 0.18), 0 6px 14px rgba(123, 200, 164, 0.12);
-    --shadow-lift: 0 4px 0 rgba(74, 63, 53, 0.08);
+    /* quiet, neutral shadows — whitespace does the work */
+    --shadow-soft: 0 2px 10px rgba(33, 31, 24, 0.06);
+    --shadow-pop: 0 8px 24px rgba(33, 31, 24, 0.10);
+    --shadow-lift: 0 2px 0 rgba(33, 31, 24, 0.05);
 
-    --transition: 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); /* bouncy */
+    --transition: 0.2s ease;     /* calm, not bouncy */
 }
 
 * {
@@ -48,13 +50,8 @@
 }
 
 body {
-    font-family: 'Nunito', 'Fredoka', sans-serif;
-    background: var(--bg);
-    background-image:
-        radial-gradient(circle at 20% 30%, rgba(255, 214, 226, 0.5) 0%, transparent 40%),
-        radial-gradient(circle at 80% 70%, rgba(214, 240, 226, 0.6) 0%, transparent 40%),
-        radial-gradient(circle at 50% 90%, rgba(229, 219, 249, 0.4) 0%, transparent 35%);
-    background-attachment: fixed;
+    font-family: 'Huninn', 'Varela Round', sans-serif;
+    background: var(--bg);   /* plain paper — whitespace is content */
     color: var(--text);
     min-height: 100vh;
     overflow-x: hidden;
@@ -66,6 +63,7 @@ body {
 
 /* ===== Pastel background blobs & sparkles ===== */
 .bg-blob {
+    display: none;
     position: fixed;
     border-radius: 50%;
     filter: blur(60px);
@@ -107,6 +105,7 @@ body {
 }
 
 .bg-sparkle {
+    display: none;
     position: fixed;
     z-index: -1;
     font-size: 1.8rem;
@@ -161,7 +160,7 @@ body {
 }
 
 .logo h1 {
-    font-family: 'Fredoka', 'Nunito', sans-serif;
+    font-family: 'Varela Round', 'Huninn', sans-serif;
     font-weight: 700;
     font-size: 2.6rem;
     letter-spacing: -0.5px;
@@ -169,7 +168,7 @@ body {
 }
 
 .highlight {
-    background: linear-gradient(135deg, var(--primary), var(--accent));
+    background: var(--primary);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -220,7 +219,7 @@ body {
     content: '';
     position: absolute;
     inset: 0;
-    background: radial-gradient(circle at 70% 30%, var(--pink-soft) 0%, transparent 50%);
+    background: radial-gradient(circle at 70% 30%, var(--primary-soft) 0%, transparent 50%);
     opacity: 0.4;
     pointer-events: none;
 }
@@ -251,7 +250,7 @@ body {
 }
 
 .upload-content h3 {
-    font-family: 'Fredoka', sans-serif;
+    font-family: 'Varela Round', 'Huninn', sans-serif;
     font-size: 1.4rem;
     font-weight: 600;
     color: var(--text);
@@ -316,7 +315,7 @@ body {
     margin-bottom: 0.9rem;
     font-size: 0.95rem;
     font-weight: 700;
-    font-family: 'Fredoka', sans-serif;
+    font-family: 'Varela Round', 'Huninn', sans-serif;
     letter-spacing: 0.2px;
 }
 
@@ -401,13 +400,13 @@ body {
 }
 
 #generate-btn {
-    background: linear-gradient(135deg, var(--accent), var(--pink));
+    background: var(--primary);
     border: none;
     padding: 0 1.4rem;
     border-radius: var(--radius-pill);
     color: white;
     font-weight: 700;
-    font-family: 'Fredoka', sans-serif;
+    font-family: 'Varela Round', 'Huninn', sans-serif;
     font-size: 0.95rem;
     cursor: pointer;
     transition: var(--transition);
@@ -440,7 +439,7 @@ body {
     left: 0;
     width: 100%;
     height: 100vh;
-    background: rgba(255, 246, 233, 0.92);
+    background: rgba(252, 251, 246, 0.94);
     backdrop-filter: blur(20px);
     z-index: 1000;
     display: flex;
@@ -464,7 +463,7 @@ body {
 }
 
 .result-title h2 {
-    font-family: 'Fredoka', sans-serif;
+    font-family: 'Varela Round', 'Huninn', sans-serif;
     font-weight: 600;
     font-size: 1.6rem;
     color: var(--text);
@@ -562,7 +561,7 @@ body {
 .loading-overlay p {
     color: var(--text-soft);
     font-weight: 700;
-    font-family: 'Fredoka', sans-serif;
+    font-family: 'Varela Round', 'Huninn', sans-serif;
 }
 
 .cute-spinner {
@@ -672,7 +671,7 @@ body {
     align-items: center;
     justify-content: center;
     font-size: 1.5rem;
-    box-shadow: 0 4px 12px rgba(123, 200, 164, 0.4);
+    box-shadow: 0 2px 8px rgba(98, 169, 104, 0.35);
     animation: avatarBob 3s ease-in-out infinite;
 }
 
@@ -689,7 +688,7 @@ body {
 
 .copilot-meta strong {
     font-size: 1.05rem;
-    font-family: 'Fredoka', sans-serif;
+    font-family: 'Varela Round', 'Huninn', sans-serif;
     color: var(--text);
 }
 
@@ -831,7 +830,7 @@ body {
 }
 
 #copilot-send {
-    background: linear-gradient(135deg, var(--primary), var(--accent));
+    background: var(--primary);
     border: none;
     color: white;
     min-width: 44px;

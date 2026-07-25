@@ -185,6 +185,12 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 data = JSON.parse(rawText);
             } catch (parseErr) {
+                // Render's proxy answers with an HTML error page when the
+                // backend times out or is (re)starting — show a human message
+                // instead of raw HTML.
+                if (response.status === 502 || response.status === 503 || response.status === 504) {
+                    throw new Error('伺服器暫時沒回應（可能正在生成中逾時，或服務剛從休眠喚醒）。請等 30 秒再試一次；若選了 4K，改用 2K 會更穩定。');
+                }
                 throw new Error(`Server returned non-JSON (HTTP ${response.status}): ${rawText.slice(0, 200)}`);
             }
 
