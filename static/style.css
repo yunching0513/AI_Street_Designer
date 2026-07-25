@@ -858,3 +858,45 @@ body {
         grid-template-rows: minmax(0, 1fr) minmax(280px, 40vh);
     }
 }
+
+/* ── mobile (phones ≤640px) ─────────────────────────────────────────── */
+@media (max-width: 640px) {
+    .container { padding: 1.5rem 1rem 3rem; gap: 1.2rem; }
+    .logo h1 { font-size: 1.9rem; }
+    .logo-emoji { font-size: 1.6rem; }
+    .subtitle { font-size: 0.92rem; }
+    .app-interface { padding: 1.1rem; gap: 1.2rem; }
+    .upload-section { min-height: 240px; }
+    .grid-options { gap: 0.6rem; }
+    .option-card { padding: 0.8rem 0.5rem; }
+
+    /* stack the prompt row; full-width tap targets; 16px inputs stop the
+       iOS focus-zoom that wrecks the fixed result overlay */
+    .input-wrapper { flex-direction: column; align-items: stretch; }
+    #generate-btn { width: 100%; padding: 0.95rem; }
+    #custom-prompt { font-size: 16px; }
+    #resolution-select { width: 100%; font-size: 16px; }
+
+    /* result overlay: dynamic viewport height + safe-area, image capped so
+       the chat (the interaction core) keeps the remaining space */
+    .result-section {
+        height: 100dvh;
+        padding: 0.75rem 0.75rem calc(0.75rem + env(safe-area-inset-bottom));
+    }
+    .result-header { margin-bottom: 0.5rem; }
+    .result-title h2 { font-size: 1.15rem; }
+    .close-result { width: 44px; height: 44px; }
+    .result-body {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 0.75rem;
+    }
+    .result-image-column { gap: 0.5rem; }
+    .result-image-wrapper { flex: none; }
+    #result-image { max-height: 34vh; }
+    .copilot-header { padding: 0.6rem 0.9rem; }
+    .copilot-messages { padding: 0.7rem 0.9rem; }
+    .copilot-suggestions { padding: 0.4rem 0.9rem; }
+    .copilot-input { padding: 0.6rem 0.75rem calc(0.6rem + env(safe-area-inset-bottom)); }
+    #copilot-input { font-size: 16px; }
+}
