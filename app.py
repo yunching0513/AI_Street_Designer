@@ -378,6 +378,27 @@ def _save_generated_image(session_id, version, image_bytes):
     return image_url, version_meta
 
 
+# Text models for 小綠, tried in order — if one is unavailable on this key
+# or region the next takes over, and the real error is logged either way.
+COPILOT_TEXT_MODELS = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash']
+
+def _copilot_generate_json(parts):
+    """generate_content with a model fallback chain; returns parsed JSON."""
+    last_err = None
+    for m in COPILOT_TEXT_MODELS:
+        try:
+            response = client.models.generate_content(
+                model=m,
+                contents=[types.Content(role='user', parts=parts)],
+                config=types.GenerateContentConfig(response_mime_type='application/json')
+            )
+            return _parse_json_response(response.text)
+        except Exception as e:
+            print(f"copilot text model {m} failed: {e}")
+            last_err = e
+    raise last_err
+
+
 def _generate_copilot_greeting(image_bytes, mime_type, user_prompt):
     """Have 小綠 review the new image and craft a welcome message + suggestions."""
     fallback = {
@@ -392,12 +413,7 @@ def _generate_copilot_greeting(image_bytes, mime_type, user_prompt):
             types.Part.from_text(text=prompt),
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
         ]
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[types.Content(role='user', parts=parts)],
-            config=types.GenerateContentConfig(response_mime_type='application/json')
-        )
-        data = _parse_json_response(response.text)
+        data = _copilot_generate_json(parts)
         return {
             'message': data.get('message', fallback['message']),
             'suggestions': data.get('suggestions', fallback['suggestions'])[:3]
@@ -430,12 +446,7 @@ def _decide_copilot_response(history, latest_image_bytes, mime_type, user_messag
             types.Part.from_text(text=prompt_text),
             types.Part.from_bytes(data=latest_image_bytes, mime_type=mime_type)
         ]
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[types.Content(role='user', parts=parts)],
-            config=types.GenerateContentConfig(response_mime_type='application/json')
-        )
-        data = _parse_json_response(response.text)
+        data = _copilot_generate_json(parts)
         intent = data.get('intent', 'chat')
         if intent not in ('refine', 'chat'):
             intent = 'chat'
@@ -475,6 +486,20 @@ def _get_session(session_id):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/api/diag')
+def diag():
+    # Model health check: which of 小綠's text models actually answer on this
+    # deployment's key/region. Open this in a browser when chat misbehaves.
+    out = {'client': bool(client), 'image_model': 'gemini-3-pro-image-preview', 'text_models': {}}
+    if client:
+        for m in COPILOT_TEXT_MODELS:
+            try:
+                client.models.generate_content(model=m, contents='ping')
+                out['text_models'][m] = 'ok'
+            except Exception as e:
+                out['text_models'][m] = f'error: {str(e)[:200]}'
+    return jsonify(out)
 
 @app.route('/api/fetch_street')
 def fetch_street():
