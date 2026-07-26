@@ -1,6 +1,9 @@
 // Resize and re-encode large images so the request body stays under Vercel's 4.5MB limit.
 async function compressImage(file, maxDimension = 1920, quality = 0.85) {
-    if (file.size < 3 * 1024 * 1024) return file;
+    const supportedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (supportedTypes.includes(file.type) && file.size < 3 * 1024 * 1024) {
+        return file;
+    }
 
     const img = await new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -26,12 +29,31 @@ async function compressImage(file, maxDimension = 1920, quality = 0.85) {
     canvas.height = height;
     canvas.getContext('2d').drawImage(img, 0, 0, width, height);
 
-    return await new Promise((resolve) => {
+    return await new Promise((resolve, reject) => {
         canvas.toBlob((blob) => {
+            if (!blob) {
+                reject(new Error('無法轉換這張圖片，請改用 JPEG、PNG 或 WebP。'));
+                return;
+            }
             const baseName = file.name.replace(/\.[^.]+$/, '');
             resolve(new File([blob], `${baseName}.jpg`, { type: 'image/jpeg' }));
         }, 'image/jpeg', quality);
     });
+}
+
+async function readApiJson(response) {
+    const rawText = await response.text();
+    try {
+        return JSON.parse(rawText);
+    } catch (parseError) {
+        if (response.status >= 500) {
+            throw new Error(
+                '伺服器暫時沒回應（可能正在生成中逾時，或服務剛從休眠喚醒）。'
+                + '請等 30 秒再試一次；若選了 4K，改用 2K 會更穩定。'
+            );
+        }
+        throw new Error(`伺服器回傳了無法辨識的內容（HTTP ${response.status}）。`);
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -45,6 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const optionCards = document.querySelectorAll('.option-card');
     const customPromptInput = document.getElementById('custom-prompt');
     const generateBtn = document.getElementById('generate-btn');
+    const providerInputs = document.querySelectorAll('input[name="image-provider"]');
 
     // Result + co-pilot
     const resultSection = document.getElementById('result-section');
@@ -63,10 +86,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // State
     let selectedFile = null;
     let selectedPrompt = '';
+    let selectedPresetId = '';
     let sessionId = null;
     let versions = []; // [{ version, image_url }]
     let currentVersion = 0;
     let chatBusy = false;
+    let generationBusy = false;
 
     // ===== Upload handling =====
     dropZone.addEventListener('dragover', (e) => {
@@ -139,30 +164,43 @@ document.addEventListener('DOMContentLoaded', () => {
             if (card.classList.contains('selected')) {
                 card.classList.remove('selected');
                 selectedPrompt = '';
+                selectedPresetId = '';
             } else {
                 optionCards.forEach(c => c.classList.remove('selected'));
                 card.classList.add('selected');
                 selectedPrompt = card.dataset.prompt;
+                selectedPresetId = card.dataset.presetId || '';
             }
             updateGenerateState();
         });
     });
     customPromptInput.addEventListener('input', updateGenerateState);
+    providerInputs.forEach(input => input.addEventListener('change', updateGenerateState));
 
     function updateGenerateState() {
         const hasFile = !!selectedFile;
         const hasPrompt = selectedPrompt || customPromptInput.value.trim().length > 0;
-        generateBtn.disabled = !(hasFile && hasPrompt);
+        const hasProvider = !!document.querySelector(
+            'input[name="image-provider"]:checked:not(:disabled)'
+        );
+        generateBtn.disabled = generationBusy || !(hasFile && hasPrompt && hasProvider);
     }
 
     // ===== First-time generation =====
     generateBtn.addEventListener('click', async () => {
-        if (!selectedFile) return;
+        if (!selectedFile || generationBusy) return;
         const effectivePrompt = customPromptInput.value.trim() || selectedPrompt;
         if (!effectivePrompt) return;
+        const providerInput = document.querySelector(
+            'input[name="image-provider"]:checked:not(:disabled)'
+        );
+        if (!providerInput) return;
 
+        generationBusy = true;
+        updateGenerateState();
         openResultPanel();
-        setLoading(true, '小綠正在打草稿...');
+        const providerName = providerInput.value === 'openai' ? 'OpenAI' : 'Gemini';
+        setLoading(true, `${providerName} 正在描繪你的新街道...`);
 
         try {
             const uploadFile = await compressImage(selectedFile);
@@ -172,27 +210,17 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('image', uploadFile);
             formData.append('prompt_type', selectedPrompt ? 'preset' : 'custom');
             formData.append('custom_prompt', effectivePrompt);
+            if (selectedPresetId) formData.append('preset_id', selectedPresetId);
             const resSel = document.getElementById('resolution-select');
             formData.append('resolution', resSel ? resSel.value : '2K');
+            formData.append('provider', providerInput.value);
 
             const response = await fetch('/api/transform', {
                 method: 'POST',
                 body: formData,
             });
 
-            const rawText = await response.text();
-            let data;
-            try {
-                data = JSON.parse(rawText);
-            } catch (parseErr) {
-                // Render's proxy answers with an HTML error page when the
-                // backend times out or is (re)starting — show a human message
-                // instead of raw HTML.
-                if (response.status === 502 || response.status === 503 || response.status === 504) {
-                    throw new Error('伺服器暫時沒回應（可能正在生成中逾時，或服務剛從休眠喚醒）。請等 30 秒再試一次；若選了 4K，改用 2K 會更穩定。');
-                }
-                throw new Error(`Server returned non-JSON (HTTP ${response.status}): ${rawText.slice(0, 200)}`);
-            }
+            const data = await readApiJson(response);
 
             if (!response.ok) {
                 throw new Error(data.error || `HTTP ${response.status}`);
@@ -220,8 +248,11 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('Generation error:', error);
             setLoading(false);
-            alert('Generation failed: ' + error.message);
+            alert('生成失敗：' + error.message);
             resultSection.classList.add('hidden');
+        } finally {
+            generationBusy = false;
+            updateGenerateState();
         }
     });
 
@@ -252,10 +283,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ session_id: sessionId, message }),
             });
-            const data = await response.json();
+            const data = await readApiJson(response);
             removeTypingIndicator();
 
-            if (data.status !== 'success') {
+            if (!response.ok || data.status !== 'success') {
                 throw new Error(data.error || 'Chat failed');
             }
 
@@ -268,7 +299,10 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             removeTypingIndicator();
             console.error('Chat error:', error);
-            addChatMessage('assistant', '糟糕，我這邊有點卡 🌱 可以再試一次嗎？');
+            addChatMessage(
+                'assistant',
+                `糟糕，我這邊有點卡 🌱 ${error.message || '可以再試一次嗎？'}`
+            );
         } finally {
             chatBusy = false;
             copilotSend.disabled = false;

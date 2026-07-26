@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>AI Street Designer | Transform Your City</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%2362A968'/%3E%3Cpath d='M50 76V39M49 50C33 50 24 40 24 25c16 0 25 9 25 25Zm2-7c2-15 11-22 26-21-1 14-10 22-26 21Z' fill='none' stroke='white' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Huninn&family=Varela+Round&display=swap" rel="stylesheet">
@@ -51,22 +52,49 @@
                 <div class="control-group">
                     <label>選一個改造風格</label>
                     <div class="grid-options">
-                        <button class="option-card" data-prompt="Widen sidewalks for better walkability">
+                        <button class="option-card" data-preset-id="widen-sidewalks" data-prompt="Widen sidewalks for better walkability">
                             <span class="option-emoji">🚶</span>
                             <span>加寬人行道</span>
                         </button>
-                        <button class="option-card" data-prompt="Add bus bays and transit priority lanes">
+                        <button class="option-card" data-preset-id="transit-priority" data-prompt="Add bus bays and transit priority lanes">
                             <span class="option-emoji">🚌</span>
                             <span>公車彎月台</span>
                         </button>
-                        <button class="option-card" data-prompt="Add bike lanes and cycling infrastructure">
+                        <button class="option-card" data-preset-id="protected-bike-lane" data-prompt="Add bike lanes and cycling infrastructure">
                             <span class="option-emoji">🚲</span>
                             <span>自行車道</span>
                         </button>
-                        <button class="option-card" data-prompt="Increase greenery, add trees and planters">
+                        <button class="option-card" data-preset-id="green-street" data-prompt="Increase greenery, add trees and planters">
                             <span class="option-emoji">🌳</span>
                             <span>綠意盎然</span>
                         </button>
+                    </div>
+                </div>
+
+                <!-- Image provider -->
+                <div class="control-group">
+                    <label>選擇圖像生成器 ✦</label>
+                    <div class="provider-options" role="radiogroup" aria-label="圖像生成器">
+                        {% for provider in image_providers %}
+                        <label class="provider-option{% if not provider.available %} provider-unavailable{% endif %}">
+                            <input
+                                type="radio"
+                                name="image-provider"
+                                value="{{ provider.value }}"
+                                {% if provider.value == default_provider %}checked{% endif %}
+                                {% if not provider.available %}disabled{% endif %}
+                            >
+                            <span class="provider-symbol">{{ '✦' if provider.value == 'gemini' else '◎' }}</span>
+                            <span class="provider-copy">
+                                <strong>{{ provider.label }}</strong>
+                                <small>
+                                    {{ provider.model }}
+                                    {% if not provider.available %} · 尚未設定 API Key{% endif %}
+                                </small>
+                            </span>
+                            <span class="provider-check" aria-hidden="true">✓</span>
+                        </label>
+                        {% endfor %}
                     </div>
                 </div>
 
@@ -74,7 +102,7 @@
                 <div class="control-group">
                     <label>或是自己許個願 💭</label>
                     <div class="input-wrapper">
-                        <input type="text" id="custom-prompt" placeholder="例如：步行區、有咖啡店和露天座位...">
+                        <input type="text" id="custom-prompt" maxlength="2000" placeholder="例如：步行區、有咖啡店和露天座位...">
                         <button id="generate-btn" disabled>
                             開始變變變 <span>✨</span>
                         </button>
@@ -133,7 +161,7 @@
                     <div class="copilot-messages" id="copilot-messages"></div>
                     <div class="copilot-suggestions" id="copilot-suggestions"></div>
                     <form class="copilot-input" id="copilot-input-form">
-                        <input type="text" id="copilot-input" placeholder="跟小綠聊聊：再多一些樹、人行道更寬..." autocomplete="off">
+                        <input type="text" id="copilot-input" maxlength="1000" placeholder="跟小綠聊聊：再多一些樹、人行道更寬..." autocomplete="off">
                         <button type="submit" id="copilot-send" aria-label="送出">💌</button>
                     </form>
                 </aside>

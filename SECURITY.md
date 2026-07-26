@@ -1,21 +1,40 @@
 # Security Policy
 
-## Supported Versions
+## Supported version
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+Security fixes are applied to the latest `main` branch and current production
+deployment.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+## Reporting a vulnerability
 
-## Reporting a Vulnerability
+Please use GitHub's private vulnerability reporting for this repository when
+available. Do not include API keys, uploaded images, or other sensitive data in
+a public issue.
 
-Use this section to tell people how to report a vulnerability.
+## Deployment requirements
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+- Store `GOOGLE_API_KEY`, `OPENAI_API_KEY`, and `DIAG_TOKEN` only in the
+  deployment platform's secret environment variables.
+- Store `REDIS_URL` and `BLOB_READ_WRITE_TOKEN` as secrets when those optional
+  services are enabled.
+- Never commit a populated `.env` file.
+- Keep `/api/diag` protected with a strong `DIAG_TOKEN`.
+- Keep the supplied one-worker Gunicorn setting unless the Redis-backed state,
+  distributed session locks, and the image-generation concurrency strategy
+  have all been reviewed for the intended instance size.
+
+## Current safeguards and limits
+
+- Uploads are limited by byte size, decoded image type, dimensions, and pixel
+  count.
+- Image generation, chat, and Street View proxy requests are rate limited.
+- Co-creation sessions expire and have bounded history and image versions.
+- With `REDIS_URL`, session state, rate limits, and per-session operation locks
+  are shared across workers. Redis values use expiring JSON, not Python pickle.
+- API errors include a request ID but do not expose internal exception details.
+
+Without `REDIS_URL`, sessions and limits are process-local and reset when the
+worker restarts. Redis preserves co-creation state, but generated image URLs
+are restart-safe only when `BLOB_READ_WRITE_TOKEN` is also configured. This
+anonymous, expiring session store is not a substitute for authenticated user
+storage.
