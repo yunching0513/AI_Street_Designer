@@ -46,3 +46,60 @@ def health():
 ```
 
 所以在設定 UptimeRobot 時,URL 可以填入 `https://你的網址/health`,減少資源消耗。
+
+## AI 圖像生成部署設定
+
+`render.yaml` 已固定正式環境的 Gunicorn timeout 與 health check。若目前的
+Render 服務不是用 Blueprint 建立，請在 Dashboard 手動同步以下設定：
+
+1. **Start Command**
+
+   ```text
+   gunicorn app:app --workers 1 --threads 4 --timeout 300 --keep-alive 75 --max-requests 30 --max-requests-jitter 10
+   ```
+
+2. **Health Check Path**：`/health`
+3. **Environment Variables**
+   - `GOOGLE_API_KEY`：啟用 Gemini 圖像與小綠對話
+   - `OPENAI_API_KEY`：啟用 OpenAI GPT Image
+   - `DIAG_TOKEN`：保護診斷端點，請使用隨機且不可猜測的值
+   - `REDIS_URL`（選用）：保存共創 session，並讓限流與 session 鎖可跨 worker
+   - `BLOB_READ_WRITE_TOKEN`（選用）：讓生成圖片在 Render 重啟後仍可存取
+   - `GEMINI_IMAGE_MODEL=gemini-3-pro-image`
+   - `GEMINI_TEXT_MODELS=gemini-flash-latest`
+   - `OPENAI_IMAGE_MODEL=gpt-image-2`
+   - `STATE_KEY_PREFIX=ai-street-designer`
+
+API Key 只放在 Render Dashboard，不可提交進 Git。設定後執行一次
+**Manual Deploy → Deploy latest commit**，再檢查：
+
+- `/health` 應回傳 HTTP 200。
+- 使用診斷 Token 呼叫 `/api/diag`：
+
+  ```bash
+  curl -H "X-Diag-Token: $DIAG_TOKEN" https://ai-street-designer.onrender.com/api/diag
+  ```
+
+  回傳的 `providers.gemini`／`providers.openai` 應符合已設定的 Key。若要執行
+  會實際呼叫 Gemini 的模型連線測試，再加上 `?models=1`。
+
+## 第三階段：持久化與自動檢查
+
+`REDIS_URL` 沒有設定時，程式會維持原本的記憶體模式，不影響本機開發。
+正式環境若要讓共創 session 在 worker 重啟後繼續存在，請在 Render 或其他
+相容服務建立 Redis，並將其連線字串設為私密環境變數 `REDIS_URL`。請勿把
+連線字串寫入 `.env.example` 或提交到 Git。
+
+Redis 保存的是有時效的 session JSON、縮小後的參考圖片、限流計數與短期鎖。
+若也希望 `/static/generated/...` 圖片網址在重新部署後仍有效，還要設定
+`BLOB_READ_WRITE_TOKEN`；只設定 Redis 並不會讓 Render 的暫存磁碟永久化。
+
+部署後用受保護的診斷端點確認：
+
+- `state_backend` 應為 `redis`；若是 `memory`，請檢查 `REDIS_URL` 與服務連線。
+- `durable_images` 應為 `true`；若是 `false`，生成圖片仍使用本機暫存磁碟。
+- `sessions` 會回報目前尚未逾時的 Redis session 數。
+
+專案也包含 `.github/workflows/ci.yml`。每次推送到 `main` 或建立 Pull Request
+時，GitHub 會自動執行測試、Python 關鍵錯誤檢查、Bandit、依賴漏洞掃描與
+前端 JavaScript 語法檢查。這些檢查不需要任何正式環境 API Key。

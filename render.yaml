@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: ai-street-designer
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      gunicorn app:app
+      --workers 1
+      --threads 4
+      --timeout 300
+      --keep-alive 75
+      --max-requests 30
+      --max-requests-jitter 10
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DIAG_TOKEN
+        generateValue: true
+      - key: REDIS_URL
+        sync: false
+      - key: BLOB_READ_WRITE_TOKEN
+        sync: false
+      - key: GEMINI_IMAGE_MODEL
+        value: gemini-3-pro-image
+      - key: GEMINI_TEXT_MODELS
+        value: gemini-flash-latest
+      - key: OPENAI_IMAGE_MODEL
+        value: gpt-image-2
+      - key: SESSION_TTL_SECONDS
+        value: '7200'
+      - key: MAX_SESSIONS
+        value: '40'
+      - key: MAX_HISTORY_TURNS
+        value: '30'
+      - key: MAX_SESSION_VERSIONS
+        value: '8'
+      - key: MAX_GENERATIONS_PER_HOUR
+        value: '6'
+      - key: MAX_CHATS_PER_10_MINUTES
+        value: '60'
+      - key: MAX_STREET_FETCHES_PER_HOUR
+        value: '120'
+      - key: STATE_KEY_PREFIX
+        value: ai-street-designer

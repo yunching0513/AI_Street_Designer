@@ -1,21 +1,26 @@
-import os
-import uuid
-import glob
-import time
-import sys
-import mimetypes
 import base64
-import json
-import tempfile
-import threading
-import re
 import gc
-import shutil
+import glob
+import hashlib
+import hmac
+import io
+import json
+import mimetypes
+import os
+import re
 import resource
+import shutil
+import sys
+import threading
+import time
+import traceback
+import urllib.parse
+import urllib.request
+import uuid
 
 # Bumped by hand on each deploy-worthy change — /api/diag reports it, so we
 # can tell at a glance whether the running instance actually has a fix.
-CODE_VERSION = '2026-07-25-mem1'
+CODE_VERSION = '2026-07-25-hardening2'
 
 def rss_mb():
     """Resident memory of this worker, in MB (Linux)."""
@@ -33,17 +38,28 @@ if sys.version_info < (3, 10):
     except ImportError:
         pass
 
-from flask import Flask, render_template, request, jsonify, url_for, Response
+from flask import Flask, render_template, request, jsonify, url_for, Response, g
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-from PIL import Image
-import io
+from PIL import Image, UnidentifiedImageError
+from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 try:
     import vercel_blob
 except ImportError:
     vercel_blob = None
+
+try:
+    import redis
+except ImportError:
+    redis = None
 
 # Load environment variables
 load_dotenv()
@@ -56,6 +72,8 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 app.config['GENERATED_FOLDER'] = 'static/generated'
 app.config['KNOWLEDGE_BASE_FOLDER'] = 'knowledge_base'
+app.config['MAX_CONTENT_LENGTH'] = 12 * 1024 * 1024
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 if not USE_BLOB:
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -67,9 +85,77 @@ GOOGLE_CLOUD_LOCATION = os.getenv('GOOGLE_CLOUD_LOCATION', 'us-central1')
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
 GOOGLE_APPLICATION_CREDENTIALS_JSON = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+DIAG_TOKEN = os.getenv('DIAG_TOKEN', '')
+REDIS_URL = os.getenv('REDIS_URL', '')
+STATE_KEY_PREFIX = os.getenv(
+    'STATE_KEY_PREFIX',
+    'ai-street-designer',
+).strip() or 'ai-street-designer'
+
+GEMINI_IMAGE_MODEL = os.getenv('GEMINI_IMAGE_MODEL', 'gemini-3-pro-image')
+OPENAI_IMAGE_MODEL = os.getenv('OPENAI_IMAGE_MODEL', 'gpt-image-2')
+COPILOT_TEXT_MODELS = [
+    model.strip()
+    for model in os.getenv('GEMINI_TEXT_MODELS', 'gemini-flash-latest').split(',')
+    if model.strip()
+] or ['gemini-flash-latest']
+GENAI_HTTP_OPTIONS = types.HttpOptions(
+    timeout=240_000,
+    retry_options=types.HttpRetryOptions(attempts=1),
+)
+
+
+def _env_int(name, default, minimum=1, maximum=None):
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    value = max(minimum, value)
+    return min(value, maximum) if maximum is not None else value
+
+
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_PIXELS = 24_000_000
+MAX_PROMPT_CHARS = 2_000
+MAX_CHAT_CHARS = 1_000
+MAX_FETCH_BYTES = 5 * 1024 * 1024
+SESSION_TTL_SECONDS = _env_int('SESSION_TTL_SECONDS', 7_200, 300, 86_400)
+MAX_SESSIONS = _env_int('MAX_SESSIONS', 40, 5, 200)
+MAX_HISTORY_TURNS = _env_int('MAX_HISTORY_TURNS', 30, 8, 100)
+MAX_SESSION_VERSIONS = _env_int('MAX_SESSION_VERSIONS', 8, 2, 20)
+MAX_GENERATIONS_PER_HOUR = _env_int(
+    'MAX_GENERATIONS_PER_HOUR', 6, 1, 100)
+MAX_CHATS_PER_10_MINUTES = _env_int(
+    'MAX_CHATS_PER_10_MINUTES', 60, 1, 1_000)
+MAX_STREET_FETCHES_PER_HOUR = _env_int(
+    'MAX_STREET_FETCHES_PER_HOUR', 120, 1, 2_000)
 
 client = None
+openai_client = None
+redis_client = None
 credentials_file_path = None
+
+if REDIS_URL and redis:
+    try:
+        redis_client = redis.Redis.from_url(
+            REDIS_URL,
+            decode_responses=False,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            socket_keepalive=True,
+            health_check_interval=30,
+        )
+        redis_client.ping()
+        print("✅ Redis session storage and distributed limits ready")
+    except Exception as e:
+        redis_client = None
+        print(
+            "⚠️  Redis unavailable; falling back to process-local state "
+            f"({e.__class__.__name__})"
+        )
+elif REDIS_URL:
+    print("⚠️  REDIS_URL is set but the redis package is unavailable")
 
 # Handle Vercel environment: create temp file from JSON string
 # (Removed for Render deployment)
@@ -84,30 +170,52 @@ if GOOGLE_CLOUD_PROJECT and credentials_file_path:
         client = genai.Client(
             vertexai=True,
             project=GOOGLE_CLOUD_PROJECT,
-            location=GOOGLE_CLOUD_LOCATION
+            location=GOOGLE_CLOUD_LOCATION,
+            http_options=GENAI_HTTP_OPTIONS,
         )
-        print(f"✅ Using Vertex AI")
+        print("✅ Using Vertex AI")
         print(f"   Project: {GOOGLE_CLOUD_PROJECT}")
         print(f"   Location: {GOOGLE_CLOUD_LOCATION}")
         print(f"   Credentials: {credentials_file_path}")
     except Exception as e:
         print(f"❌ Failed to initialize Vertex AI Client: {e}")
-        print(f"   Falling back to Gemini API if available...")
+        print("   Falling back to Gemini API if available...")
 
 # Fall back to Gemini API (edit_image not supported)
 if client is None and GOOGLE_API_KEY:
     try:
-        client = genai.Client(api_key=GOOGLE_API_KEY)
-        print("⚠️  Using Gemini API (edit_image not supported, will use generate_images)")
+        client = genai.Client(
+            api_key=GOOGLE_API_KEY,
+            http_options=GENAI_HTTP_OPTIONS,
+        )
+        print(f"✅ Gemini API ready ({GEMINI_IMAGE_MODEL})")
     except Exception as e:
         print(f"❌ Failed to initialize API Client: {e}")
 
 if client is None:
-    print("❌ No valid credentials found!")
-    print("   Please set either:")
+    print("⚠️  Gemini credentials not found.")
+    print("   To enable Gemini image generation and 小綠, set either:")
     print("   - GOOGLE_CLOUD_PROJECT + GOOGLE_APPLICATION_CREDENTIALS_JSON (for Vertex AI on Vercel)")
     print("   - GOOGLE_CLOUD_PROJECT + GOOGLE_APPLICATION_CREDENTIALS (for Vertex AI locally)")
     print("   - GOOGLE_API_KEY (for Gemini API)")
+
+if OPENAI_API_KEY and OpenAI:
+    try:
+        # Image edits may take close to two minutes. Keep one request below the
+        # Gunicorn timeout and let the user retry instead of silently doubling
+        # the request duration inside the SDK.
+        openai_client = OpenAI(
+            api_key=OPENAI_API_KEY,
+            timeout=180.0,
+            max_retries=0,
+        )
+        print(f"✅ OpenAI image generation ready ({OPENAI_IMAGE_MODEL})")
+    except Exception as e:
+        print(f"❌ Failed to initialize OpenAI Client: {e}")
+elif OPENAI_API_KEY and not OpenAI:
+    print("❌ OPENAI_API_KEY is set, but the openai package is not installed.")
+else:
+    print("ℹ️  OPENAI_API_KEY not set; OpenAI image generation is disabled.")
 
 # Cache for knowledge base summary
 KNOWLEDGE_CONTEXT_CACHE = None
@@ -247,9 +355,9 @@ def get_knowledge_context():
         Summarize these into a concise set of instructions for an AI image generator.
         """))
         
-        print("Consulting Gemini 2.0 Flash Exp for Knowledge Base Summary...")
+        print(f"Consulting {COPILOT_TEXT_MODELS[0]} for Knowledge Base Summary...")
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model=COPILOT_TEXT_MODELS[0],
             contents=[types.Content(parts=prompt_parts)]
         )
         summary = response.text
@@ -265,12 +373,31 @@ def get_knowledge_context():
 # ===== Co-pilot session storage =====
 SESSIONS = {}
 SESSIONS_LOCK = threading.Lock()
+RATE_LIMITS = {}
+RATE_LIMITS_LOCK = threading.Lock()
+SESSION_INDEX_KEY = f'{STATE_KEY_PREFIX}:sessions'
+SESSION_LOCK_SECONDS = 360
+
+RATE_LIMIT_SCRIPT = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+return {count, ttl}
+"""
+
+LOCK_RELEASE_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
 
 # One generation at a time: concurrent multi-MB generations on the 512 MB
 # free instance OOM-kill the worker mid-request (gunicorn's bare 500 page).
 GEN_LOCK = threading.BoundedSemaphore(1)
 GEN_LOCK_HELD = False
-MAX_SESSIONS = 200  # simple LRU cap
 
 COPILOT_PERSONA = """你是「小綠」🌱，一個熱愛永續設計、活潑友善的 AI 街道設計副駕駛。
 你和使用者並肩工作，一起把街道改造得更好。你的個性：友善、有同理心、會主動觀察畫面細節、講話帶一點溫度。
@@ -332,18 +459,127 @@ def _read_image_bytes(path):
         return f.read(), mime_type
 
 
-def _generate_image_from_reference(image_bytes, mime_type, prompt_text, resolution='2K'):
-    """Call the image-to-image model and return the generated image bytes.
+def _validate_uploaded_image(file):
+    """Read and validate an uploaded image from its actual bytes."""
+    image_bytes = file.read(MAX_IMAGE_BYTES + 1)
+    if not image_bytes:
+        raise ValueError('上傳的圖片是空的。')
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        raise ValueError('圖片不可超過 8 MB。')
 
-    resolution: '1K' | '2K' | '4K' — Nano Banana Pro output size. Falls back
-    to the model default if this SDK build lacks ImageConfig.
-    """
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image_format = (image.format or '').upper()
+            width, height = image.size
+            if width < 128 or height < 128:
+                raise ValueError('圖片長寬至少需要 128 像素。')
+            if width * height > MAX_IMAGE_PIXELS:
+                raise ValueError('圖片像素過大，請縮小到 2400 萬像素以下。')
+            image.verify()
+    except ValueError:
+        raise
+    except (
+        Image.DecompressionBombError,
+        UnidentifiedImageError,
+        OSError,
+        SyntaxError,
+    ) as e:
+        raise ValueError('檔案不是有效的 JPEG、PNG 或 WebP 圖片。') from e
+
+    mime_type = {
+        'JPEG': 'image/jpeg',
+        'PNG': 'image/png',
+        'WEBP': 'image/webp',
+    }.get(image_format)
+    if not mime_type:
+        raise ValueError('目前只支援 JPEG、PNG 與 WebP 圖片。')
+    return image_bytes, mime_type
+
+
+IMAGE_PROVIDER_LABELS = {
+    'gemini': 'Google Gemini',
+    'openai': 'OpenAI GPT Image',
+}
+
+PRESET_STYLE_KEYS = {
+    'widen-sidewalks': '連續人行道拓寬 (Widened Sidewalk)',
+    'transit-priority': '公車彎與公車優先道 (Bus Bay & Transit Priority)',
+    'protected-bike-lane': '自行車專用道 (Protected Bike Lane)',
+    'green-street': '街道綠化與設施帶 (Green Street)',
+}
+
+
+def _image_provider_is_ready(provider):
+    if provider == 'gemini':
+        return client is not None
+    if provider == 'openai':
+        return openai_client is not None
+    return False
+
+
+def _image_provider_options():
+    return [
+        {
+            'value': 'gemini',
+            'label': IMAGE_PROVIDER_LABELS['gemini'],
+            'model': GEMINI_IMAGE_MODEL,
+            'available': _image_provider_is_ready('gemini'),
+        },
+        {
+            'value': 'openai',
+            'label': IMAGE_PROVIDER_LABELS['openai'],
+            'model': OPENAI_IMAGE_MODEL,
+            'available': _image_provider_is_ready('openai'),
+        },
+    ]
+
+
+def _openai_image_settings(image_bytes, resolution):
+    """Choose a valid gpt-image-2 size while preserving source orientation."""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            width, height = image.size
+    except Exception:
+        width, height = 3, 2
+
+    is_landscape = width >= height
+    ratio = max(width, height) / max(1, min(width, height))
+    ratio = min(max(ratio, 1.0), 3.0)
+
+    if resolution == '1K':
+        long_edge = 1024
+        short_edge = long_edge / ratio
+        quality = 'low'
+    elif resolution == '4K':
+        # gpt-image-2 currently caps the long/short edges at 3840/2160.
+        short_edge = min(2160, 3840 / ratio)
+        long_edge = min(3840, short_edge * ratio)
+        quality = 'high'
+    else:
+        long_edge = 2048
+        short_edge = long_edge / ratio
+        quality = 'medium'
+
+    def multiple_of_16(value):
+        return max(16, round(value / 16) * 16)
+
+    long_edge = multiple_of_16(long_edge)
+    short_edge = multiple_of_16(short_edge)
+    size = (
+        f'{long_edge}x{short_edge}'
+        if is_landscape
+        else f'{short_edge}x{long_edge}'
+    )
+    return size, quality
+
+
+def _generate_gemini_image(image_bytes, mime_type, prompt_text, resolution):
     transformation_parts = [
         types.Part.from_text(text=prompt_text),
         types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
     ]
     kwargs = dict(
-        model='gemini-3-pro-image-preview',
+        model=GEMINI_IMAGE_MODEL,
         contents=[types.Content(role='user', parts=transformation_parts)]
     )
     if resolution in ('1K', '2K', '4K'):
@@ -362,6 +598,61 @@ def _generate_image_from_reference(image_bytes, mime_type, prompt_text, resoluti
     return None
 
 
+def _generate_openai_image(image_bytes, mime_type, prompt_text, resolution):
+    size, quality = _openai_image_settings(image_bytes, resolution)
+    supported_extensions = {
+        'image/jpeg': '.jpg',
+        'image/jpg': '.jpg',
+        'image/png': '.png',
+        'image/webp': '.webp',
+    }
+    extension = supported_extensions.get(mime_type)
+    if not extension:
+        # gpt-image-2 accepts JPEG, PNG, and WebP. Normalize other browser
+        # formats when Pillow can decode them instead of uploading mislabeled
+        # bytes.
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            normalized = io.BytesIO()
+            image.convert('RGB').save(normalized, format='JPEG', quality=92)
+            image_bytes = normalized.getvalue()
+        extension = '.jpg'
+
+    upload = io.BytesIO(image_bytes)
+    upload.name = f'reference{extension}'
+    response = openai_client.images.edit(
+        model=OPENAI_IMAGE_MODEL,
+        image=upload,
+        prompt=prompt_text,
+        size=size,
+        quality=quality,
+        output_format='png',
+    )
+    if not response.data or not response.data[0].b64_json:
+        return None
+    return base64.b64decode(response.data[0].b64_json, validate=True)
+
+
+def _generate_image_from_reference(
+    image_bytes,
+    mime_type,
+    prompt_text,
+    resolution='2K',
+    provider='gemini',
+):
+    """Dispatch one image edit to the provider selected by the user."""
+    if provider == 'gemini':
+        if not client:
+            raise RuntimeError('Gemini image provider is not configured')
+        return _generate_gemini_image(
+            image_bytes, mime_type, prompt_text, resolution)
+    if provider == 'openai':
+        if not openai_client:
+            raise RuntimeError('OpenAI image provider is not configured')
+        return _generate_openai_image(
+            image_bytes, mime_type, prompt_text, resolution)
+    raise ValueError(f'Unsupported image provider: {provider}')
+
+
 def _save_generated_image(session_id, version, image_bytes):
     """Save a generated image, returning (url, version_meta).
 
@@ -370,7 +661,6 @@ def _save_generated_image(session_id, version, image_bytes):
     returned metadata so the co-pilot can refine without re-fetching.
     """
     filename = f"v{version}.png"
-    mime_type = 'image/png'
 
     if USE_BLOB:
         blob_path = f'generated/{session_id}/{filename}'
@@ -401,10 +691,6 @@ def _save_generated_image(session_id, version, image_bytes):
     }
     return image_url, version_meta
 
-
-# Text models for 小綠, tried in order — if one is unavailable on this key
-# or region the next takes over, and the real error is logged either way.
-COPILOT_TEXT_MODELS = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash']
 
 def _prune_generated_dirs(keep=40):
     """Generated images otherwise pile up until the instance is redeployed;
@@ -520,67 +806,543 @@ def _decide_copilot_response(history, latest_image_bytes, mime_type, user_messag
         return fallback
 
 
+def _prune_sessions_locked(now=None):
+    now = now or time.time()
+    expired = [
+        session_id
+        for session_id, session in SESSIONS.items()
+        if now - session.get('updated_at', session.get('created_at', now))
+        > SESSION_TTL_SECONDS
+    ]
+    for session_id in expired:
+        SESSIONS.pop(session_id, None)
+
+
+def _make_session_room_locked(now=None):
+    _prune_sessions_locked(now)
+    while len(SESSIONS) >= MAX_SESSIONS:
+        oldest = min(
+            SESSIONS,
+            key=lambda session_id: SESSIONS[session_id].get(
+                'updated_at',
+                SESSIONS[session_id].get('created_at', 0),
+            ),
+        )
+        SESSIONS.pop(oldest, None)
+
+
+def _append_history_locked(session, role, message):
+    session['history'].append({'role': role, 'message': message})
+    if len(session['history']) > MAX_HISTORY_TURNS:
+        del session['history'][:-MAX_HISTORY_TURNS]
+    session['updated_at'] = time.time()
+
+
+def _redis_session_key(session_id):
+    return f'{STATE_KEY_PREFIX}:session:{session_id}'
+
+
+def _serialize_session(session):
+    versions = []
+    for version in session.get('versions', [])[-MAX_SESSION_VERSIONS:]:
+        if not isinstance(version, dict):
+            continue
+        image_bytes = version.get('bytes', b'')
+        if not isinstance(image_bytes, bytes):
+            continue
+        versions.append({
+            'url': str(version.get('url') or ''),
+            'bytes_b64': base64.b64encode(image_bytes).decode('ascii'),
+            'mime_type': str(
+                version.get('mime_type') or 'image/jpeg'
+            ),
+        })
+
+    history = [
+        {
+            'role': str(turn.get('role') or ''),
+            'message': str(turn.get('message') or ''),
+        }
+        for turn in session.get('history', [])[-MAX_HISTORY_TURNS:]
+        if isinstance(turn, dict)
+    ]
+    payload = {
+        'versions': versions,
+        'history': history,
+        'initial_prompt': str(session.get('initial_prompt') or ''),
+        'resolution': str(session.get('resolution') or '2K'),
+        'provider': str(session.get('provider') or 'gemini'),
+        'version_count': int(
+            session.get('version_count', len(versions))
+        ),
+        'created_at': float(session.get('created_at') or time.time()),
+        'updated_at': float(session.get('updated_at') or time.time()),
+    }
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(',', ':'),
+    ).encode('utf-8')
+
+
+def _deserialize_session(raw):
+    if isinstance(raw, bytes):
+        raw = raw.decode('utf-8')
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError('session payload must be an object')
+
+    versions = []
+    for version in payload.get('versions', [])[-MAX_SESSION_VERSIONS:]:
+        if not isinstance(version, dict):
+            continue
+        image_bytes = base64.b64decode(
+            version.get('bytes_b64') or '',
+            validate=True,
+        )
+        if not image_bytes or len(image_bytes) > MAX_IMAGE_BYTES:
+            raise ValueError('invalid persisted image')
+        mime_type = version.get('mime_type') or 'image/jpeg'
+        if mime_type not in ('image/jpeg', 'image/png', 'image/webp'):
+            raise ValueError('invalid persisted image type')
+        versions.append({
+            'url': str(version.get('url') or ''),
+            'bytes': image_bytes,
+            'mime_type': mime_type,
+        })
+    if not versions:
+        raise ValueError('persisted session has no image versions')
+
+    history = [
+        {
+            'role': str(turn.get('role') or ''),
+            'message': str(turn.get('message') or ''),
+        }
+        for turn in payload.get('history', [])[-MAX_HISTORY_TURNS:]
+        if isinstance(turn, dict)
+    ]
+    now = time.time()
+    return {
+        'versions': versions,
+        'history': history,
+        'initial_prompt': str(payload.get('initial_prompt') or ''),
+        'resolution': str(payload.get('resolution') or '2K'),
+        'provider': str(payload.get('provider') or 'gemini'),
+        'version_count': max(
+            len(versions),
+            int(payload.get('version_count') or len(versions)),
+        ),
+        'created_at': float(payload.get('created_at') or now),
+        'updated_at': float(payload.get('updated_at') or now),
+        '_operation_lock': threading.Lock(),
+    }
+
+
+def _persist_session(session_id, session):
+    if not redis_client:
+        return False
+    try:
+        updated_at = float(session.get('updated_at') or time.time())
+        redis_client.set(
+            _redis_session_key(session_id),
+            _serialize_session(session),
+            ex=SESSION_TTL_SECONDS,
+        )
+        redis_client.zadd(
+            SESSION_INDEX_KEY,
+            {session_id: updated_at},
+        )
+        redis_client.zremrangebyscore(
+            SESSION_INDEX_KEY,
+            0,
+            time.time() - SESSION_TTL_SECONDS,
+        )
+        session_count = int(redis_client.zcard(SESSION_INDEX_KEY))
+        if session_count > MAX_SESSIONS:
+            oldest_ids = redis_client.zrange(
+                SESSION_INDEX_KEY,
+                0,
+                session_count - MAX_SESSIONS - 1,
+            )
+            if oldest_ids:
+                decoded_ids = [
+                    value.decode('utf-8')
+                    if isinstance(value, bytes)
+                    else str(value)
+                    for value in oldest_ids
+                ]
+                redis_client.delete(*[
+                    _redis_session_key(oldest_id)
+                    for oldest_id in decoded_ids
+                ])
+                redis_client.zrem(SESSION_INDEX_KEY, *decoded_ids)
+        return True
+    except Exception as e:
+        print(
+            "Redis session write failed; using local cache "
+            f"({e.__class__.__name__})"
+        )
+        return False
+
+
+def _load_persisted_session(session_id):
+    if not redis_client:
+        return None
+    try:
+        raw = redis_client.get(_redis_session_key(session_id))
+        if not raw:
+            redis_client.zrem(SESSION_INDEX_KEY, session_id)
+            return None
+        return _deserialize_session(raw)
+    except (ValueError, TypeError, UnicodeDecodeError) as e:
+        print(
+            "Discarding invalid Redis session "
+            f"({e.__class__.__name__})"
+        )
+        try:
+            redis_client.delete(_redis_session_key(session_id))
+            redis_client.zrem(SESSION_INDEX_KEY, session_id)
+        except Exception as cleanup_error:
+            print(
+                "Redis invalid session cleanup failed "
+                f"({cleanup_error.__class__.__name__})"
+            )
+        return None
+    except Exception as e:
+        print(
+            "Redis session read failed; using local cache "
+            f"({e.__class__.__name__})"
+        )
+        return None
+
+
+def _touch_persisted_session(session_id, updated_at):
+    if not redis_client:
+        return
+    try:
+        key = _redis_session_key(session_id)
+        if redis_client.expire(key, SESSION_TTL_SECONDS):
+            redis_client.zadd(
+                SESSION_INDEX_KEY,
+                {session_id: updated_at},
+            )
+    except Exception as e:
+        print(f"Redis session touch failed ({e.__class__.__name__})")
+
+
+def _session_count():
+    if redis_client:
+        try:
+            redis_client.zremrangebyscore(
+                SESSION_INDEX_KEY,
+                0,
+                time.time() - SESSION_TTL_SECONDS,
+            )
+            return int(redis_client.zcard(SESSION_INDEX_KEY))
+        except Exception as e:
+            print(f"Redis session count failed ({e.__class__.__name__})")
+    with SESSIONS_LOCK:
+        _prune_sessions_locked()
+        return len(SESSIONS)
+
+
+def _acquire_session_operation(session_id, session):
+    if redis_client:
+        key = f'{STATE_KEY_PREFIX}:lock:session:{session_id}'
+        token = uuid.uuid4().hex
+        try:
+            if redis_client.set(
+                key,
+                token,
+                nx=True,
+                ex=SESSION_LOCK_SECONDS,
+            ):
+                return ('redis', key, token)
+            return None
+        except Exception as e:
+            print(
+                "Redis session lock failed; using local lock "
+                f"({e.__class__.__name__})"
+            )
+
+    operation_lock = session['_operation_lock']
+    if operation_lock.acquire(blocking=False):
+        return ('local', operation_lock, None)
+    return None
+
+
+def _release_session_operation(handle):
+    backend, lock, token = handle
+    if backend == 'local':
+        lock.release()
+        return
+    try:
+        redis_client.eval(LOCK_RELEASE_SCRIPT, 1, lock, token)
+    except Exception as e:
+        print(f"Redis session lock release failed ({e.__class__.__name__})")
+
+
 def _create_session(initial_version_path, initial_prompt):
     """Create a new co-pilot session and return its id."""
     session_id = uuid.uuid4().hex[:12]
+    now = time.time()
     with SESSIONS_LOCK:
-        # Simple LRU eviction
-        if len(SESSIONS) >= MAX_SESSIONS:
-            oldest = next(iter(SESSIONS))
-            SESSIONS.pop(oldest, None)
+        _make_session_room_locked(now)
         SESSIONS[session_id] = {
             'versions': [initial_version_path],
             'history': [],
             'initial_prompt': initial_prompt or '',
-            'created_at': time.time(),
+            'version_count': 1,
+            'created_at': now,
+            'updated_at': now,
+            '_operation_lock': threading.Lock(),
         }
     return session_id
 
 
 def _get_session(session_id):
+    now = time.time()
     with SESSIONS_LOCK:
-        return SESSIONS.get(session_id)
+        _prune_sessions_locked(now)
+        session = SESSIONS.get(session_id)
+        if session:
+            session['updated_at'] = now
+    if session:
+        _touch_persisted_session(session_id, now)
+        return session
+
+    session = _load_persisted_session(session_id)
+    if not session:
+        return None
+    session['updated_at'] = now
+    with SESSIONS_LOCK:
+        _make_session_room_locked(now)
+        existing_session = SESSIONS.get(session_id)
+        if existing_session:
+            session = existing_session
+            session['updated_at'] = now
+        else:
+            SESSIONS[session_id] = session
+    _touch_persisted_session(session_id, now)
+    return session
+
+
+def _refresh_persisted_session(session_id, fallback_session):
+    """Reload after acquiring the distributed lock to avoid stale workers."""
+    if not redis_client:
+        return fallback_session
+    persisted_session = _load_persisted_session(session_id)
+    if not persisted_session:
+        return fallback_session
+    persisted_session['updated_at'] = time.time()
+    with SESSIONS_LOCK:
+        SESSIONS[session_id] = persisted_session
+    return persisted_session
+
+
+def _api_error(message, status, code, retry_after=None):
+    payload = {
+        'error': message,
+        'code': code,
+        'request_id': getattr(g, 'request_id', None),
+    }
+    response = jsonify(payload)
+    response.status_code = status
+    if retry_after is not None:
+        response.headers['Retry-After'] = str(retry_after)
+    return response
+
+
+def _check_rate_limit(scope, limit, window_seconds):
+    client_identifier = hashlib.sha256(
+        (request.remote_addr or 'unknown').encode('utf-8')
+    ).hexdigest()[:24]
+    if redis_client:
+        rate_key = f'{STATE_KEY_PREFIX}:rate:{scope}:{client_identifier}'
+        try:
+            count, ttl = redis_client.eval(
+                RATE_LIMIT_SCRIPT,
+                1,
+                rate_key,
+                window_seconds,
+            )
+            if int(count) > limit:
+                return _api_error(
+                    '操作太頻繁，請稍後再試。',
+                    429,
+                    'rate_limited',
+                    retry_after=max(1, int(ttl)),
+                )
+            return None
+        except Exception as e:
+            print(
+                "Redis rate limit failed; using local limit "
+                f"({e.__class__.__name__})"
+            )
+
+    now = time.monotonic()
+    key = (scope, client_identifier)
+    with RATE_LIMITS_LOCK:
+        if len(RATE_LIMITS) > 5_000:
+            stale = [
+                rate_key
+                for rate_key, (started, _, window) in RATE_LIMITS.items()
+                if now - started >= window
+            ]
+            for rate_key in stale:
+                RATE_LIMITS.pop(rate_key, None)
+            while len(RATE_LIMITS) >= 5_000:
+                oldest = min(
+                    RATE_LIMITS,
+                    key=lambda rate_key: RATE_LIMITS[rate_key][0],
+                )
+                RATE_LIMITS.pop(oldest, None)
+
+        started, count, window = RATE_LIMITS.get(
+            key, (now, 0, window_seconds))
+        if now - started >= window_seconds:
+            started, count, window = now, 0, window_seconds
+        if count >= limit:
+            retry_after = max(1, int(window_seconds - (now - started)) + 1)
+            return _api_error(
+                '操作太頻繁，請稍後再試。',
+                429,
+                'rate_limited',
+                retry_after=retry_after,
+            )
+        RATE_LIMITS[key] = (started, count + 1, window)
+    return None
+
+
+@app.before_request
+def _begin_request():
+    g.request_id = uuid.uuid4().hex[:12]
+    g.request_started = time.monotonic()
+
+
+@app.after_request
+def _finish_request(response):
+    response.headers['X-Request-ID'] = getattr(g, 'request_id', '')
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
+    elapsed = (time.monotonic() - getattr(
+        g, 'request_started', time.monotonic())) * 1000
+    response.headers['Server-Timing'] = f'app;dur={elapsed:.1f}'
+    return response
 
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    providers = _image_provider_options()
+    configured = [p for p in providers if p['available']]
+    default_provider = configured[0]['value'] if configured else 'gemini'
+    return render_template(
+        'index.html',
+        image_providers=providers,
+        default_provider=default_provider,
+    )
+
+
+@app.route('/health')
+def health():
+    """Lightweight liveness endpoint for Render health checks."""
+    return jsonify({
+        'status': 'ok',
+        'code_version': CODE_VERSION,
+    })
+
 
 @app.errorhandler(Exception)
 def _unhandled_error(e):
-    """Return JSON (and log the traceback) instead of Flask's bare HTML 500,
-    so the frontend can show a real message and Render logs show the cause."""
-    import traceback
-    from werkzeug.exceptions import HTTPException
+    """Keep every API failure JSON and avoid exposing exception details."""
     if isinstance(e, HTTPException):
+        if request.path.startswith('/api/'):
+            messages = {
+                404: ('找不到這個 API 路徑。', 'not_found'),
+                405: ('不支援這個請求方法。', 'method_not_allowed'),
+                413: ('上傳內容過大，請縮小圖片後再試。', 'payload_too_large'),
+            }
+            message, code = messages.get(
+                e.code,
+                (e.description or '請求失敗。', 'http_error'),
+            )
+            return _api_error(message, e.code or 500, code)
         return e
+    print(
+        f"[{getattr(g, 'request_id', '-')}] unhandled error: "
+        f"{e.__class__.__name__}: {e}"
+    )
     traceback.print_exc()
-    return jsonify({'error': f'{e.__class__.__name__}: {str(e)[:200]}'}), 500
+    return _api_error(
+        '伺服器發生未預期錯誤，請稍後再試。',
+        500,
+        'internal_error',
+    )
+
 
 @app.route('/api/diag')
 def diag():
-    # Model health check: which of 小綠's text models actually answer on this
-    # deployment's key/region. Open this in a browser when chat misbehaves.
+    supplied_token = request.headers.get('X-Diag-Token', '')
+    authorized = bool(DIAG_TOKEN) and bool(supplied_token) and hmac.compare_digest(
+        supplied_token,
+        DIAG_TOKEN,
+    )
+    if DIAG_TOKEN and not authorized:
+        return _api_error(
+            '診斷端點需要授權。',
+            403,
+            'diag_forbidden',
+        )
+
     out = {
         'code_version': CODE_VERSION,
         'rss_mb': rss_mb(),
-        'sessions': len(SESSIONS),
+        'sessions': _session_count(),
+        'state_backend': 'redis' if redis_client else 'memory',
+        'durable_images': USE_BLOB,
         'generating': GEN_LOCK_HELD,
-        'client': bool(client),
-        'image_model': 'gemini-3-pro-image-preview',
+        'providers': {
+            provider: _image_provider_is_ready(provider)
+            for provider in IMAGE_PROVIDER_LABELS
+        },
+        'image_models': {
+            'gemini': GEMINI_IMAGE_MODEL,
+            'openai': OPENAI_IMAGE_MODEL,
+        },
+        'session_ttl_seconds': SESSION_TTL_SECONDS,
         'text_models': {},
     }
     if request.args.get('models') != '1':
-        out['note'] = 'add ?models=1 to also ping the text models'
+        out['note'] = 'add ?models=1 with X-Diag-Token to ping text models'
         return jsonify(out)
+    if not authorized:
+        return _api_error(
+            '模型連線測試需要設定 DIAG_TOKEN。',
+            403,
+            'diag_token_required',
+        )
     if client:
         for m in COPILOT_TEXT_MODELS:
             try:
                 client.models.generate_content(model=m, contents='ping')
                 out['text_models'][m] = 'ok'
             except Exception as e:
-                out['text_models'][m] = f'error: {str(e)[:200]}'
+                out['text_models'][m] = (
+                    f'error: {e.__class__.__name__}'
+                )
     return jsonify(out)
+
+
+def _is_allowed_street_view_url(url):
+    parsed = urllib.parse.urlsplit(url)
+    return (
+        parsed.scheme == 'https'
+        and parsed.hostname == 'maps.googleapis.com'
+        and parsed.path == '/maps/api/streetview'
+    )
+
 
 @app.route('/api/fetch_street')
 def fetch_street():
@@ -589,52 +1351,131 @@ def fetch_street():
     # hit CORS and the Maps key's referrer restriction; the backend has
     # neither problem. Restricted to the Street View Static endpoint so this
     # can't be used as an open proxy.
+    rate_error = _check_rate_limit(
+        'fetch_street',
+        MAX_STREET_FETCHES_PER_HOUR,
+        3_600,
+    )
+    if rate_error is not None:
+        return rate_error
+
     url = request.args.get('url', '')
-    if not url.startswith('https://maps.googleapis.com/maps/api/streetview'):
-        return jsonify({'error': 'unsupported url'}), 400
+    if not _is_allowed_street_view_url(url):
+        return _api_error(
+            '只允許 Google Street View Static 圖片網址。',
+            400,
+            'unsupported_url',
+        )
     try:
-        import urllib.request
         req = urllib.request.Request(url, headers={'User-Agent': 'ai-street-designer'})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = r.read()
-            ctype = r.headers.get('Content-Type', 'image/jpeg')
-        if not ctype.startswith('image/'):
-            return jsonify({'error': 'not an image'}), 502
+        # Scheme, host, and path are allowlisted above; redirects are checked
+        # again before any response body is read.
+        with urllib.request.urlopen(req, timeout=15) as r:  # nosec B310
+            if not _is_allowed_street_view_url(r.geturl()):
+                return _api_error(
+                    'Street View 圖片發生不安全的重新導向。',
+                    502,
+                    'unsafe_redirect',
+                )
+            data = r.read(MAX_FETCH_BYTES + 1)
+            ctype = r.headers.get(
+                'Content-Type', 'image/jpeg').split(';', 1)[0].lower()
+        if len(data) > MAX_FETCH_BYTES:
+            return _api_error(
+                'Street View 圖片過大。',
+                502,
+                'street_image_too_large',
+            )
+        if ctype not in ('image/jpeg', 'image/png', 'image/webp'):
+            return _api_error(
+                'Street View 服務沒有回傳有效圖片。',
+                502,
+                'street_image_invalid',
+            )
         return Response(data, mimetype=ctype)
     except Exception as e:
-        return jsonify({'error': f'fetch failed: {e}'}), 502
+        print(
+            f"[{g.request_id}] Street View fetch failed: "
+            f"{e.__class__.__name__}: {e}"
+        )
+        return _api_error(
+            '暫時無法取得 Street View 圖片。',
+            502,
+            'street_fetch_failed',
+        )
 
 @app.route('/api/transform', methods=['POST'])
 def transform_image():
+    rate_error = _check_rate_limit(
+        'transform',
+        MAX_GENERATIONS_PER_HOUR,
+        3_600,
+    )
+    if rate_error is not None:
+        return rate_error
+
     if 'image' not in request.files:
-        return jsonify({'error': 'No image uploaded'}), 400
-    if not client:
-        return jsonify({'error': 'Backend API Client not initialized. Check server logs.'}), 500
-    
+        return _api_error(
+            '請先上傳一張街景圖片。',
+            400,
+            'image_required',
+        )
+
     file = request.files['image']
-    custom_prompt = request.form.get('custom_prompt')
+    custom_prompt = (request.form.get('custom_prompt') or '').strip()
+    preset_id = (request.form.get('preset_id') or '').strip()
     resolution = request.form.get('resolution', '2K')
+    provider = (request.form.get('provider') or 'gemini').strip().lower()
+    if not custom_prompt:
+        return _api_error(
+            '請描述你想進行的街道改造。',
+            400,
+            'prompt_required',
+        )
+    if len(custom_prompt) > MAX_PROMPT_CHARS:
+        return _api_error(
+            f'改造描述不可超過 {MAX_PROMPT_CHARS} 個字元。',
+            400,
+            'prompt_too_long',
+        )
+    if preset_id and preset_id not in PRESET_STYLE_KEYS:
+        return _api_error(
+            '不支援的快捷改造選項。',
+            400,
+            'preset_invalid',
+        )
+    if provider not in IMAGE_PROVIDER_LABELS:
+        return _api_error(
+            '不支援的圖像生成器。',
+            400,
+            'provider_invalid',
+        )
+    if not _image_provider_is_ready(provider):
+        label = IMAGE_PROVIDER_LABELS[provider]
+        return _api_error(
+            f'{label} 尚未設定 API Key，請先完成伺服器環境變數設定。',
+            503,
+            'provider_unavailable',
+        )
     if resolution not in ('1K', '2K', '4K'):
         resolution = '2K'
-    
+
     if not file or file.filename == '':
-        return jsonify({'error': 'Invalid file'}), 400
+        return _api_error(
+            '上傳的圖片無效。',
+            400,
+            'image_invalid',
+        )
 
     # Read original image bytes directly (avoids writing to read-only FS on Vercel)
-    filename = str(uuid.uuid4()) + "_" + file.filename
-    print(f"Preparing reference image: {filename}")
     try:
-        mime_type, _ = mimetypes.guess_type(file.filename)
-        if not mime_type:
-            mime_type = 'image/jpeg'  # default fallback
-
-        image_bytes = file.read()
-
-        print(f"Image prepared (size: {len(image_bytes)} bytes, mime: {mime_type})")
-
-    except Exception as e:
-        print(f"Error preparing reference image: {e}")
-        return jsonify({'error': f'Failed to prepare image: {str(e)}'}), 500
+        image_bytes, mime_type = _validate_uploaded_image(file)
+        print(
+            f"[{g.request_id}] image validated "
+            f"(size={len(image_bytes)}, mime={mime_type})"
+        )
+    except ValueError as e:
+        return _api_error(str(e), 400, 'image_invalid')
     
     # Load Taiwan human-centered street design knowledge (curated markdown).
     # Style intro + the english "quick reference card" go into the prompt;
@@ -654,7 +1495,9 @@ def transform_image():
     
     # Import locally to avoid top-level path issues if file missing
     try:
-        sys.path.append(os.path.join(app.root_path, 'knowledge_base'))
+        knowledge_path = os.path.join(app.root_path, 'knowledge_base')
+        if knowledge_path not in sys.path:
+            sys.path.append(knowledge_path)
         from street_prompt_data_taiwan import get_taiwan_design_prompt
         from street_prompt_data_full import get_set_design_prompt
         
@@ -667,12 +1510,13 @@ def transform_image():
         # The current UI sends 'custom_prompt' as the main text.
         
         # We will try to see if the custom_prompt *is* a key in our dictionaries
-        p1, np1 = get_taiwan_design_prompt(custom_prompt, custom_prompt)
+        option_key = PRESET_STYLE_KEYS.get(preset_id, custom_prompt)
+        p1, np1 = get_taiwan_design_prompt(option_key, custom_prompt)
         if p1:
             specialized_prompt = p1
             negative_prompt = np1
         else:
-            p2, np2 = get_set_design_prompt(custom_prompt, custom_prompt)
+            p2, np2 = get_set_design_prompt(option_key, custom_prompt)
             if p2:
                 specialized_prompt = p2
                 negative_prompt = np2
@@ -718,12 +1562,17 @@ def transform_image():
         - The perspective must match the original image exactly.
         """
     
-    print(f"Generating with prompt:\n{full_prompt}")
+    print(
+        f"[{g.request_id}] prompt ready "
+        f"(provider={provider}, chars={len(full_prompt)})"
+    )
 
     try:
-        # Use Gemini 3 Pro Image Preview for TRUE image-to-image transformation
-        # This model accepts the input image and generates a modified version
-        print(f"Transforming image with gemini-3-pro-image-preview (TRUE image-to-image)...")
+        model = GEMINI_IMAGE_MODEL if provider == 'gemini' else OPENAI_IMAGE_MODEL
+        print(
+            f"[{g.request_id}] transforming image with "
+            f"{provider}/{model}"
+        )
 
         # Build the prompt with both text instruction and reference image
         prompt_text = f"""Transform this street view image with the following changes:
@@ -744,52 +1593,83 @@ The result should look like the same street, same buildings, same view - just wi
             prompt_text += f"\n\nDO NOT include: {negative_prompt}"
 
         if not GEN_LOCK.acquire(blocking=False):
-            return jsonify({'error': '另一張圖正在生成中，免費主機一次只能畫一張——等它畫完再試一次 🌱'}), 429
+            return _api_error(
+                '另一張圖正在生成中，免費主機一次只能畫一張——等它畫完再試一次 🌱',
+                429,
+                'generation_busy',
+                retry_after=15,
+            )
         global GEN_LOCK_HELD
         GEN_LOCK_HELD = True
-        print(f"[mem] before generate: {rss_mb()} MB (resolution={resolution})")
+        print(
+            f"[{g.request_id}] [mem] before generate: {rss_mb()} MB "
+            f"(provider={provider}, resolution={resolution})"
+        )
         try:
-            generated_image_data = _generate_image_from_reference(image_bytes, mime_type, prompt_text, resolution=resolution)
+            generated_image_data = _generate_image_from_reference(
+                image_bytes,
+                mime_type,
+                prompt_text,
+                resolution=resolution,
+                provider=provider,
+            )
         finally:
             GEN_LOCK_HELD = False
             GEN_LOCK.release()
-        print(f"[mem] after generate: {rss_mb()} MB, "
-              f"image={len(generated_image_data or b'')/1024/1024:.1f} MB")
+        print(
+            f"[{g.request_id}] [mem] after generate: {rss_mb()} MB, "
+            f"image={len(generated_image_data or b'') / 1024 / 1024:.1f} MB"
+        )
 
         if not generated_image_data:
-            return jsonify({'error': 'No image generated in response'}), 500
+            return _api_error(
+                '圖像服務沒有回傳圖片，請稍後再試。',
+                502,
+                'empty_image_response',
+            )
 
         # Create co-pilot session and save v1 (Vercel Blob in prod, local disk in dev)
         session_id = uuid.uuid4().hex[:12]
         generated_url, version_meta = _save_generated_image(session_id, 1, generated_image_data)
+        now = time.time()
         with SESSIONS_LOCK:
-            if len(SESSIONS) >= MAX_SESSIONS:
-                SESSIONS.pop(next(iter(SESSIONS)), None)
+            _make_session_room_locked(now)
             SESSIONS[session_id] = {
                 'versions': [version_meta],
                 'history': [],
                 'initial_prompt': custom_prompt or '',
                 'resolution': resolution,
-                'created_at': time.time(),
+                'provider': provider,
+                'version_count': 1,
+                'created_at': now,
+                'updated_at': now,
+                '_operation_lock': threading.Lock(),
             }
 
         # Full-res bytes are on disk/blob and a shrunk copy is in the session —
         # drop the big buffer before the greeting call so peak RSS stays low.
         del generated_image_data
         gc.collect()
-        print(f"[mem] after release: {rss_mb()} MB")
+        print(f"[{g.request_id}] [mem] after release: {rss_mb()} MB")
 
         # Ask 小綠 to write a greeting, reusing the already-shrunk copy
         greeting = _generate_copilot_greeting(
             version_meta['bytes'], version_meta.get('mime_type', 'image/jpeg'), custom_prompt or '')
         with SESSIONS_LOCK:
-            SESSIONS[session_id]['history'].append({'role': 'assistant', 'message': greeting['message']})
+            _append_history_locked(
+                SESSIONS[session_id],
+                'assistant',
+                greeting['message'],
+            )
+            session = SESSIONS[session_id]
+        _persist_session(session_id, session)
 
         return jsonify({
             'status': 'success',
             'session_id': session_id,
             'version': 1,
             'image_url': generated_url,
+            'provider': provider,
             'copilot': {
                 'message': greeting['message'],
                 'suggestions': greeting['suggestions'],
@@ -797,34 +1677,112 @@ The result should look like the same street, same buildings, same view - just wi
         })
 
     except Exception as e:
-        print(f"Error generating image: {e}")
-        return jsonify({'error': f"API Error: {str(e)}"}), 500
+        print(
+            f"[{g.request_id}] image generation failed with {provider}: "
+            f"{e.__class__.__name__}: {e}"
+        )
+        upstream_status = getattr(e, 'status_code', None)
+        if upstream_status == 429:
+            return _api_error(
+                '圖像服務目前請求太多或額度不足，請稍後再試。',
+                429,
+                'provider_rate_limited',
+                retry_after=60,
+            )
+        if 'timeout' in e.__class__.__name__.lower():
+            return _api_error(
+                '圖像生成逾時。請稍後再試，或先改用較低畫質。',
+                504,
+                'generation_timeout',
+            )
+        return _api_error(
+            f'{IMAGE_PROVIDER_LABELS[provider]} 圖像生成失敗，請稍後再試。',
+            502,
+            'generation_failed',
+        )
 
 
 @app.route('/api/chat', methods=['POST'])
 def chat_with_copilot():
     """Co-pilot dialogue endpoint: classifies intent, optionally refines the image."""
+    rate_error = _check_rate_limit(
+        'chat',
+        MAX_CHATS_PER_10_MINUTES,
+        600,
+    )
+    if rate_error is not None:
+        return rate_error
+
     if not client:
-        return jsonify({'error': 'Backend API Client not initialized.'}), 500
+        return _api_error(
+            '小綠對話功能需要設定 Google API Key。',
+            503,
+            'copilot_unavailable',
+        )
 
     data = request.get_json(silent=True) or {}
-    session_id = data.get('session_id')
-    user_message = (data.get('message') or '').strip()
+    if not isinstance(data, dict):
+        return _api_error(
+            '請求內容必須是 JSON 物件。',
+            400,
+            'json_invalid',
+        )
+    session_id = str(data.get('session_id') or '').strip()
+    message = data.get('message')
+    user_message = message.strip() if isinstance(message, str) else ''
 
     if not session_id or not user_message:
-        return jsonify({'error': 'session_id and message are required'}), 400
+        return _api_error(
+            'session_id 與 message 為必填欄位。',
+            400,
+            'chat_fields_required',
+        )
+    if not re.fullmatch(r'[a-f0-9]{12}', session_id):
+        return _api_error(
+            'session_id 格式無效。',
+            400,
+            'session_id_invalid',
+        )
+    if len(user_message) > MAX_CHAT_CHARS:
+        return _api_error(
+            f'訊息不可超過 {MAX_CHAT_CHARS} 個字元。',
+            400,
+            'message_too_long',
+        )
 
     session = _get_session(session_id)
     if not session:
-        return jsonify({'error': 'Session not found or expired'}), 404
+        return _api_error(
+            '共創工作階段不存在或已逾時，請重新生成一張圖片。',
+            404,
+            'session_expired',
+        )
 
+    operation_handle = _acquire_session_operation(session_id, session)
+    if not operation_handle:
+        return _api_error(
+            '這個共創工作階段正在處理上一個要求，請稍候。',
+            409,
+            'session_busy',
+            retry_after=5,
+        )
+    try:
+        session = _refresh_persisted_session(session_id, session)
+        return _chat_with_session(session_id, session, user_message)
+    finally:
+        _persist_session(session_id, session)
+        _release_session_operation(operation_handle)
+
+
+def _chat_with_session(session_id, session, user_message):
+    global GEN_LOCK_HELD
     latest = session['versions'][-1]
     latest_bytes = latest['bytes']
     mime_type = latest.get('mime_type', 'image/png')
 
     # Record the user turn before asking the model
     with SESSIONS_LOCK:
-        session['history'].append({'role': 'user', 'message': user_message})
+        _append_history_locked(session, 'user', user_message)
         history_snapshot = list(session['history'])
 
     decision = _decide_copilot_response(history_snapshot, latest_bytes, mime_type, user_message)
@@ -853,45 +1811,78 @@ CRITICAL INSTRUCTIONS:
 - PRESERVE camera perspective and viewpoint exactly
 - ONLY adjust street-level elements as instructed
 - Photorealistic quality, consistent lighting"""
-        if GEN_LOCK.acquire(blocking=False):
-            try:
-                new_image_bytes = _generate_image_from_reference(
-                    latest_bytes, mime_type, full_prompt,
-                    resolution=session.get('resolution', '2K'))
-            except Exception as e:
-                print(f"Refinement generation failed: {e}")
-                new_image_bytes = None
-            finally:
-                GEN_LOCK.release()
-        else:
-            print("Refinement skipped: another generation in progress")
-            new_image_bytes = None
-
-        if new_image_bytes:
-            with SESSIONS_LOCK:
-                version_num = len(session['versions']) + 1
-            new_url, new_meta = _save_generated_image(session_id, version_num, new_image_bytes)
-            with SESSIONS_LOCK:
-                session['versions'].append(new_meta)
-                session['history'].append({'role': 'assistant', 'message': decision['message']})
-            result.update({
-                'image_url': new_url,
-                'version': version_num,
-            })
-        else:
-            # Couldn't regenerate — downgrade to a chat response
-            result['intent'] = 'chat'
-            result['message'] = (
-                decision['message']
-                + '\n\n（不過我剛剛畫的時候卡住了一下，可以再描述一次你想看到的樣子嗎？）'
+        if not GEN_LOCK.acquire(blocking=False):
+            return _api_error(
+                '另一張圖正在生成中，請等它完成後再調整。',
+                429,
+                'generation_busy',
+                retry_after=15,
             )
-            with SESSIONS_LOCK:
-                session['history'].append({'role': 'assistant', 'message': result['message']})
+        GEN_LOCK_HELD = True
+        try:
+            new_image_bytes = _generate_image_from_reference(
+                latest_bytes,
+                mime_type,
+                full_prompt,
+                resolution=session.get('resolution', '2K'),
+                provider=session.get('provider', 'gemini'),
+            )
+        except Exception as e:
+            print(
+                f"[{g.request_id}] refinement failed: "
+                f"{e.__class__.__name__}: {e}"
+            )
+            return _api_error(
+                '圖片調整失敗，請稍後再試。',
+                502,
+                'refinement_failed',
+            )
+        finally:
+            GEN_LOCK_HELD = False
+            GEN_LOCK.release()
+
+        if not new_image_bytes:
+            return _api_error(
+                '圖像服務沒有回傳調整後的圖片。',
+                502,
+                'empty_image_response',
+            )
+
+        version_num = session.get(
+            'version_count',
+            len(session['versions']),
+        ) + 1
+        new_url, new_meta = _save_generated_image(
+            session_id,
+            version_num,
+            new_image_bytes,
+        )
+        with SESSIONS_LOCK:
+            session['version_count'] = version_num
+            session['versions'].append(new_meta)
+            if len(session['versions']) > MAX_SESSION_VERSIONS:
+                del session['versions'][:-MAX_SESSION_VERSIONS]
+            _append_history_locked(
+                session,
+                'assistant',
+                decision['message'],
+            )
+        result.update({
+            'image_url': new_url,
+            'version': version_num,
+        })
     else:
         with SESSIONS_LOCK:
-            session['history'].append({'role': 'assistant', 'message': decision['message']})
+            _append_history_locked(
+                session,
+                'assistant',
+                decision['message'],
+            )
 
     return jsonify(result)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8888)
+    app.run(
+        debug=os.getenv('FLASK_DEBUG') == '1',
+        port=_env_int('PORT', 8888, 1, 65_535),
+    )

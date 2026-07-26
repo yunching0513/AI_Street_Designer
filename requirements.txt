@@ -1,6 +1,8 @@
 flask>=3.0,<4
-google-genai>=1.0,<2
+google-genai>=1.75,<3
+openai>=2.11,<3
 python-dotenv>=1.0
 pillow>=10.0
 gunicorn>=21.0
+redis>=6.4,<9
 vercel_blob>=0.4

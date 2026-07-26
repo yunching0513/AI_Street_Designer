@@ -67,6 +67,42 @@ TAIWAN_STREET_DESIGN_DICT = {
         "manual_ref": "手冊 3.4 騎樓：騎樓地坪應平整，並與人行道順平。"
     },
 
+    "連續人行道拓寬 (Widened Sidewalk)": {
+        "en_name": "Continuous Widened Sidewalk",
+        "set_typology": "Re-purposing Sections",
+        "description": "Reallocate road or curbside parking space to create a wider, continuous, barrier-free sidewalk. Keep a clear walking path and accessible curb ramps while preserving existing buildings.",
+        "keywords": "wide continuous sidewalk, barrier-free pedestrian path, accessible curb ramps, tactile paving, clear walking zone, reduced vehicle space, Taiwan streetscape",
+        "negative_prompt": "narrow sidewalk, abrupt sidewalk ending, steps, parked scooters blocking pedestrians, inaccessible curb",
+        "manual_ref": "手冊 3.2 人行道：維持連續、無障礙且足夠寬度的行人通行空間。"
+    },
+
+    "公車彎與公車優先道 (Bus Bay & Transit Priority)": {
+        "en_name": "Accessible Bus Bay and Transit Priority Lane",
+        "set_typology": "Transit Priority",
+        "description": "Add a clearly marked curbside bus bay and transit-priority lane. Provide an accessible boarding area connected to the sidewalk, a shelter, seating, and an unobstructed pedestrian path.",
+        "keywords": "curbside bus bay, red transit priority lane, accessible bus boarding island, bus shelter, seating, tactile paving, clear pedestrian path, Taiwan bus stop",
+        "negative_prompt": "bus blocking crosswalk, passengers boarding from traffic lane, inaccessible platform, motorcycles in bus bay, isolated shelter",
+        "manual_ref": "人本交通原則：大眾運輸停靠空間應與連續人行動線及無障礙候車區整合。"
+    },
+
+    "自行車專用道 (Protected Bike Lane)": {
+        "en_name": "Protected Urban Bike Lane",
+        "set_typology": "Re-purposing Sections",
+        "description": "Reallocate part of the carriageway into a continuous protected bicycle lane. Separate cyclists from moving and parked vehicles with a buffer, planters, or low separators.",
+        "keywords": "protected bicycle lane, green bike pavement, physical buffer, low separators, intersection bike markings, cyclists, continuous cycling network, Taiwan street",
+        "negative_prompt": "cars or motorcycles in bike lane, disappearing bike lane, unsafe door zone, cyclists mixed with fast traffic",
+        "manual_ref": "人本交通原則：自行車動線應連續、清楚，並在高車速路段提供實體或空間分隔。"
+    },
+
+    "街道綠化與設施帶 (Green Street)": {
+        "en_name": "Green Street and Furniture Zone",
+        "set_typology": "Re-purposing Sections",
+        "description": "Create a coordinated green furniture zone along the sidewalk with regularly spaced shade trees, rain gardens, planters, seating, and organized utilities without narrowing the clear walking path.",
+        "keywords": "continuous street trees, shade canopy, rain garden, bioswale, planted furniture zone, public bench, organized utilities, clear sidewalk, subtropical Taiwan planting",
+        "negative_prompt": "planters blocking sidewalk, random isolated pots, overgrown path, hidden storefronts, roots creating trip hazards",
+        "manual_ref": "手冊 3.2.3 公共設施帶：將植栽與街道設施集中配置，保留連續淨寬。"
+    },
+
     # ------------------------------------------------------------------
     # Category 3: 寧靜區與通學巷 (Entire Street / Traffic Calming)
     # ------------------------------------------------------------------
