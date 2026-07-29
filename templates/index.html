@@ -116,6 +116,33 @@
                     </div>
                 </div>
 
+                <!-- Image provider -->
+                <div class="control-group">
+                    <label>選擇圖像生成器 ✦</label>
+                    <div class="provider-options" role="radiogroup" aria-label="圖像生成器">
+                        {% for provider in image_providers %}
+                        <label class="provider-option{% if not provider.available %} provider-unavailable{% endif %}">
+                            <input
+                                type="radio"
+                                name="image-provider"
+                                value="{{ provider.value }}"
+                                {% if provider.value == default_provider %}checked{% endif %}
+                                {% if not provider.available %}disabled{% endif %}
+                            >
+                            <span class="provider-symbol">{{ '✦' if provider.value == 'gemini' else '◎' }}</span>
+                            <span class="provider-copy">
+                                <strong>{{ provider.label }}</strong>
+                                <small>
+                                    {{ provider.model }}
+                                    {% if not provider.available %} · 尚未設定 API Key{% endif %}
+                                </small>
+                            </span>
+                            <span class="provider-check" aria-hidden="true">✓</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+
                 <!-- Custom Prompt -->
                 <div class="control-group">
                     <label data-i18n="customWish">或是自己許個願 💭</label>
