@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import mimetypes
 import os
 import re
@@ -20,7 +21,7 @@ import uuid
 
 # Bumped by hand on each deploy-worthy change — /api/diag reports it, so we
 # can tell at a glance whether the running instance actually has a fix.
-CODE_VERSION = '2026-07-25-hardening2'
+CODE_VERSION = '2026-07-27-openai-image2'
 
 def rss_mb():
     """Resident memory of this worker, in MB (Linux)."""
@@ -120,6 +121,9 @@ MAX_IMAGE_PIXELS = 24_000_000
 MAX_PROMPT_CHARS = 2_000
 MAX_CHAT_CHARS = 1_000
 MAX_FETCH_BYTES = 5 * 1024 * 1024
+OPENAI_MIN_IMAGE_PIXELS = 655_360
+OPENAI_MAX_IMAGE_PIXELS = 8_294_400
+OPENAI_MAX_IMAGE_EDGE = 3_840
 SESSION_TTL_SECONDS = _env_int('SESSION_TTL_SECONDS', 7_200, 300, 86_400)
 MAX_SESSIONS = _env_int('MAX_SESSIONS', 40, 5, 200)
 MAX_HISTORY_TURNS = _env_int('MAX_HISTORY_TURNS', 30, 8, 100)
@@ -506,6 +510,7 @@ PRESET_STYLE_KEYS = {
     'transit-priority': '公車彎與公車優先道 (Bus Bay & Transit Priority)',
     'protected-bike-lane': '自行車專用道 (Protected Bike Lane)',
     'green-street': '街道綠化與設施帶 (Green Street)',
+    'reduce-motor-traffic': '減少汽機車與道路空間重分配 (Reduced Motor Traffic)',
 }
 
 
@@ -561,10 +566,24 @@ def _openai_image_settings(image_bytes, resolution):
         quality = 'medium'
 
     def multiple_of_16(value):
-        return max(16, round(value / 16) * 16)
+        return max(16, math.ceil(value / 16) * 16)
 
     long_edge = multiple_of_16(long_edge)
     short_edge = multiple_of_16(short_edge)
+    total_pixels = long_edge * short_edge
+    if total_pixels < OPENAI_MIN_IMAGE_PIXELS:
+        scale = math.sqrt(OPENAI_MIN_IMAGE_PIXELS / total_pixels)
+        long_edge = multiple_of_16(long_edge * scale)
+        short_edge = multiple_of_16(short_edge * scale)
+
+    while long_edge * short_edge > OPENAI_MAX_IMAGE_PIXELS:
+        if long_edge >= short_edge:
+            long_edge -= 16
+        else:
+            short_edge -= 16
+    long_edge = min(long_edge, OPENAI_MAX_IMAGE_EDGE)
+    short_edge = min(short_edge, OPENAI_MAX_IMAGE_EDGE)
+
     size = (
         f'{long_edge}x{short_edge}'
         if is_landscape
@@ -1153,6 +1172,60 @@ def _api_error(message, status, code, retry_after=None):
     return response
 
 
+def _openai_generation_error(error):
+    status = getattr(error, 'status_code', None)
+    code = getattr(error, 'code', None)
+    body = getattr(error, 'body', None)
+    if isinstance(body, dict):
+        code = code or body.get('code')
+
+    if 'timeout' in error.__class__.__name__.lower():
+        return _api_error(
+            'OpenAI 圖像生成逾時，請改用 1K 或 2K 後再試。',
+            504,
+            'openai_timeout',
+        )
+    if status == 401:
+        return _api_error(
+            'OpenAI API Key 無效或已撤銷，請在 Render 更新金鑰。',
+            503,
+            'openai_auth_failed',
+        )
+    if status == 403:
+        return _api_error(
+            'OpenAI 專案目前無法使用 GPT Image；請檢查模型權限與組織驗證。',
+            503,
+            'openai_access_denied',
+        )
+    if status == 429:
+        return _api_error(
+            'OpenAI 圖像額度不足或請求過多，請檢查專案用量後稍候再試。',
+            429,
+            'openai_rate_limited',
+            retry_after=60,
+        )
+    if status == 400 and code == 'moderation_blocked':
+        return _api_error(
+            '這次圖片或描述未通過 OpenAI 安全檢查，請調整描述後再試。',
+            400,
+            'openai_moderation_blocked',
+        )
+    if status == 400:
+        return _api_error(
+            'OpenAI 無法處理這組圖片設定，請改用 2K 或調整圖片後再試。',
+            400,
+            'openai_request_invalid',
+        )
+    if status and status >= 500:
+        return _api_error(
+            'OpenAI 圖像服務暫時無法回應，請稍後再試。',
+            502,
+            'openai_upstream_error',
+            retry_after=30,
+        )
+    return None
+
+
 def _check_rate_limit(scope, limit, window_seconds):
     client_identifier = hashlib.sha256(
         (request.remote_addr or 'unknown').encode('utf-8')
@@ -1225,7 +1298,7 @@ def _finish_request(response):
     response.headers['X-Request-ID'] = getattr(g, 'request_id', '')
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-    if request.path.startswith('/api/'):
+    if request.path == '/' or request.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
     elapsed = (time.monotonic() - getattr(
         g, 'request_started', time.monotonic())) * 1000
@@ -1677,10 +1750,16 @@ The result should look like the same street, same buildings, same view - just wi
         })
 
     except Exception as e:
+        upstream_request_id = getattr(e, 'request_id', None)
         print(
             f"[{g.request_id}] image generation failed with {provider}: "
-            f"{e.__class__.__name__}: {e}"
+            f"{e.__class__.__name__}: {e}; "
+            f"upstream_request_id={upstream_request_id or '-'}"
         )
+        if provider == 'openai':
+            openai_error = _openai_generation_error(e)
+            if openai_error is not None:
+                return openai_error
         upstream_status = getattr(e, 'status_code', None)
         if upstream_status == 429:
             return _api_error(

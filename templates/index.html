@@ -68,6 +68,10 @@
                             <span class="option-emoji">🌳</span>
                             <span>綠意盎然</span>
                         </button>
+                        <button class="option-card" data-preset-id="reduce-motor-traffic" data-prompt="Remove most visible private cars and scooters, and reclaim the street space for people">
+                            <span class="option-emoji">🚘</span>
+                            <span>減少汽機車</span>
+                        </button>
                     </div>
                 </div>
 
@@ -137,16 +141,40 @@
             <div class="result-body">
                 <!-- Left: image + version strip -->
                 <div class="result-image-column">
-                    <div class="result-image-wrapper">
+                    <div class="result-image-wrapper" id="comparison-viewer">
                         <div class="loading-overlay hidden" id="loading-overlay">
                             <div class="cute-spinner">
                                 <span>🌱</span>
                             </div>
                             <p id="loading-text">小綠正在動筆中...</p>
                         </div>
-                        <img id="result-image" src="" alt="Generated Design">
+                        <img id="result-image" class="comparison-image comparison-after" src="" alt="改造後的街道設計">
+                        <img id="before-image" class="comparison-image comparison-before" src="" alt="改造前的原始街道">
+                        <div class="comparison-label comparison-label-before" aria-hidden="true">Before · 改造前</div>
+                        <div class="comparison-label comparison-label-after" aria-hidden="true">After · 改造後</div>
+                        <input
+                            type="range"
+                            class="comparison-range"
+                            id="comparison-range"
+                            min="0"
+                            max="100"
+                            value="50"
+                            aria-label="拖曳比較改造前後"
+                            aria-valuetext="改造前 50%，改造後 50%"
+                        >
+                        <div class="comparison-divider" aria-hidden="true">
+                            <span class="comparison-handle">↔</span>
+                        </div>
                     </div>
                     <div class="version-strip" id="version-strip"></div>
+                    <button class="video-launcher" id="video-launcher" type="button" disabled>
+                        <span class="video-launcher-icon" aria-hidden="true">🎬</span>
+                        <span class="video-launcher-copy">
+                            <strong id="video-launcher-title">滿意這一版？製作街道漫遊影片</strong>
+                            <small id="video-launcher-summary">以第一人稱沿著新街道向前走</small>
+                        </span>
+                        <span class="video-launcher-arrow" aria-hidden="true">→</span>
+                    </button>
                 </div>
 
                 <!-- Right: co-pilot chat -->
@@ -165,6 +193,82 @@
                         <button type="submit" id="copilot-send" aria-label="送出">💌</button>
                     </form>
                 </aside>
+            </div>
+
+            <div class="video-modal-backdrop hidden" id="video-modal" role="presentation">
+                <section
+                    class="video-setup-card"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="video-setup-title"
+                    aria-describedby="video-setup-description"
+                >
+                    <button class="video-modal-close" id="video-modal-close" type="button" aria-label="關閉影片設定">✕</button>
+
+                    <div class="video-setup-heading">
+                        <span class="video-setup-kicker">WALK THROUGH YOUR DESIGN</span>
+                        <h3 id="video-setup-title">走進你設計的街道</h3>
+                        <p id="video-setup-description">鏡頭會像行人的視線，沿著人行道自然向前移動。</p>
+                    </div>
+
+                    <form id="video-setup-form">
+                        <fieldset class="video-option-group">
+                            <legend>步行節奏</legend>
+                            <div class="video-choice-grid video-speed-grid">
+                                <label class="video-choice">
+                                    <input type="radio" name="video-speed" value="gentle">
+                                    <span aria-hidden="true">🍃</span>
+                                    <strong>慢慢散步</strong>
+                                    <small>悠閒看街景</small>
+                                </label>
+                                <label class="video-choice">
+                                    <input type="radio" name="video-speed" value="natural" checked>
+                                    <span aria-hidden="true">🚶</span>
+                                    <strong>自然步行</strong>
+                                    <small>最適合預覽</small>
+                                </label>
+                                <label class="video-choice">
+                                    <input type="radio" name="video-speed" value="brisk">
+                                    <span aria-hidden="true">✨</span>
+                                    <strong>輕快前進</strong>
+                                    <small>更有動態感</small>
+                                </label>
+                            </div>
+                        </fieldset>
+
+                        <div class="video-options-row">
+                            <fieldset class="video-option-group">
+                                <legend>影片長度</legend>
+                                <div class="video-segmented">
+                                    <label><input type="radio" name="video-duration" value="8" checked><span>8 秒</span></label>
+                                    <label><input type="radio" name="video-duration" value="16"><span>16 秒</span></label>
+                                    <label><input type="radio" name="video-duration" value="20"><span>20 秒</span></label>
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="video-option-group">
+                                <legend>畫面比例</legend>
+                                <div class="video-segmented">
+                                    <label><input type="radio" name="video-format" value="landscape" checked><span>▰ 橫式</span></label>
+                                    <label><input type="radio" name="video-format" value="portrait"><span>▯ 直式</span></label>
+                                </div>
+                            </fieldset>
+                        </div>
+
+                        <div class="video-safety-note">
+                            <span aria-hidden="true">👁️</span>
+                            <p><strong>第一人稱漫遊</strong><br>畫面不會出現使用者本人，降低人臉造成的生成失敗。</p>
+                        </div>
+
+                        <div class="video-form-actions">
+                            <button class="video-cancel-button" id="video-cancel" type="button">稍後再說</button>
+                            <button class="video-confirm-button" type="submit">
+                                <span>確認影片設定</span>
+                                <span aria-hidden="true">🎬</span>
+                            </button>
+                        </div>
+                    </form>
+                </section>
             </div>
         </div>
     </main>

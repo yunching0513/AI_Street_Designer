@@ -44,6 +44,18 @@ def test_index_renders_both_provider_choices(monkeypatch):
     assert b'value="gemini"' in response.data
     assert b'value="openai"' in response.data
     assert b'gpt-image-2' in response.data
+    assert b'data-preset-id="reduce-motor-traffic"' in response.data
+    assert '減少汽機車'.encode() in response.data
+    assert b'id="comparison-viewer"' in response.data
+    assert b'id="before-image"' in response.data
+    assert b'id="comparison-range"' in response.data
+    assert b'id="video-launcher"' in response.data
+    assert b'id="video-modal"' in response.data
+    assert b'name="video-speed"' in response.data
+    assert b'name="video-duration"' in response.data
+    assert b'name="video-format"' in response.data
+    assert '確認影片設定'.encode() in response.data
+    assert response.headers['Cache-Control'] == 'no-store'
 
 
 def test_every_homepage_preset_resolves_to_specialized_prompt():
@@ -60,14 +72,21 @@ def test_every_homepage_preset_resolves_to_specialized_prompt():
 def test_openai_settings_preserve_orientation_and_valid_multiples():
     landscape = make_png(1600, 900)
     portrait = make_png(900, 1600)
+    extra_wide = make_png(3000, 1000)
 
     landscape_size, landscape_quality = street_app._openai_image_settings(
-        landscape, '4K')
+        landscape, '1K')
     portrait_size, portrait_quality = street_app._openai_image_settings(
         portrait, '2K')
+    extra_wide_size, _ = street_app._openai_image_settings(
+        extra_wide, '1K')
 
     landscape_width, landscape_height = map(int, landscape_size.split('x'))
     portrait_width, portrait_height = map(int, portrait_size.split('x'))
+    extra_wide_width, extra_wide_height = map(
+        int,
+        extra_wide_size.split('x'),
+    )
     assert landscape_width > landscape_height
     assert portrait_height > portrait_width
     assert all(
@@ -77,10 +96,44 @@ def test_openai_settings_preserve_orientation_and_valid_multiples():
             landscape_height,
             portrait_width,
             portrait_height,
+            extra_wide_width,
+            extra_wide_height,
         )
     )
-    assert landscape_quality == 'high'
+    assert all(
+        street_app.OPENAI_MIN_IMAGE_PIXELS <= width * height
+        <= street_app.OPENAI_MAX_IMAGE_PIXELS
+        for width, height in (
+            (landscape_width, landscape_height),
+            (portrait_width, portrait_height),
+            (extra_wide_width, extra_wide_height),
+        )
+    )
+    assert extra_wide_width / extra_wide_height <= 3
+    assert landscape_quality == 'low'
     assert portrait_quality == 'medium'
+
+
+def test_openai_errors_are_user_actionable():
+    cases = [
+        (401, None, 503, 'openai_auth_failed'),
+        (403, None, 503, 'openai_access_denied'),
+        (429, None, 429, 'openai_rate_limited'),
+        (400, 'moderation_blocked', 400, 'openai_moderation_blocked'),
+        (400, 'invalid_image', 400, 'openai_request_invalid'),
+        (500, None, 502, 'openai_upstream_error'),
+    ]
+    with street_app.app.test_request_context('/api/transform'):
+        street_app.g.request_id = 'test-request'
+        for status, code, expected_status, expected_code in cases:
+            error = SimpleNamespace(
+                status_code=status,
+                code=code,
+                body={},
+            )
+            response = street_app._openai_generation_error(error)
+            assert response.status_code == expected_status
+            assert response.get_json()['code'] == expected_code
 
 
 def test_openai_generation_uses_edit_api(monkeypatch):

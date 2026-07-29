@@ -83,6 +83,18 @@ API Key 只放在 Render Dashboard，不可提交進 Git。設定後執行一次
   回傳的 `providers.gemini`／`providers.openai` 應符合已設定的 Key。若要執行
   會實際呼叫 Gemini 的模型連線測試，再加上 `?models=1`。
 
+### OpenAI 圖像選項顯示「尚未設定 API Key」
+
+正式網站的 `/api/diag` 若回傳 `"openai": false`，代表 Render worker 啟動時
+沒有讀到 `OPENAI_API_KEY`。請在 Render Web Service 的 **Environment** 頁面
+新增或更新 `OPENAI_API_KEY`（不要加引號或前後空白），儲存後重新部署。
+部署完成後重新開啟首頁；首頁已禁止快取供應商狀態，OpenAI 選項應立即啟用。
+
+`gpt-image-2` 可能要求 OpenAI API 組織完成驗證。若金鑰已設定但生成時回報
+權限或組織驗證錯誤，請到 OpenAI developer console 檢查 Organization
+Verification、專案模型權限與用量／額度。不要把 API Key 貼到 GitHub Issue、
+瀏覽器前端程式或診斷截圖中。
+
 ## 第三階段：持久化與自動檢查
 
 `REDIS_URL` 沒有設定時，程式會維持原本的記憶體模式，不影響本機開發。

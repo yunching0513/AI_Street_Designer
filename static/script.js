@@ -1,4 +1,4 @@
-// Resize and re-encode large images so the request body stays under Vercel's 4.5MB limit.
+// Resize and re-encode large images to keep Render requests and model inputs small.
 async function compressImage(file, maxDimension = 1920, quality = 0.85) {
     const supportedTypes = ['image/jpeg', 'image/png', 'image/webp'];
     if (supportedTypes.includes(file.type) && file.size < 3 * 1024 * 1024) {
@@ -46,13 +46,18 @@ async function readApiJson(response) {
     try {
         return JSON.parse(rawText);
     } catch (parseError) {
+        const requestId = response.headers.get('X-Request-ID');
+        const diagnostic = requestId ? `（診斷碼 ${requestId}）` : '';
         if (response.status >= 500) {
             throw new Error(
-                '伺服器暫時沒回應（可能正在生成中逾時，或服務剛從休眠喚醒）。'
-                + '請等 30 秒再試一次；若選了 4K，改用 2K 會更穩定。'
+                `生成程序在完成前中斷（HTTP ${response.status}）${diagnostic}。`
+                + '可能是 Render worker 重啟、記憶體不足或上游服務逾時；'
+                + '請等 30 秒再試一次，並先改用 1K 或 2K。'
             );
         }
-        throw new Error(`伺服器回傳了無法辨識的內容（HTTP ${response.status}）。`);
+        throw new Error(
+            `伺服器回傳了無法辨識的內容（HTTP ${response.status}）${diagnostic}。`
+        );
     }
 }
 
@@ -71,7 +76,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Result + co-pilot
     const resultSection = document.getElementById('result-section');
+    const comparisonViewer = document.getElementById('comparison-viewer');
+    const comparisonRange = document.getElementById('comparison-range');
+    const beforeImage = document.getElementById('before-image');
     const resultImage = document.getElementById('result-image');
+    const beforeLabel = comparisonViewer.querySelector('.comparison-label-before');
+    const afterLabel = comparisonViewer.querySelector('.comparison-label-after');
     const closeResultBtn = document.getElementById('close-result');
     const loadingOverlay = document.getElementById('loading-overlay');
     const loadingText = document.getElementById('loading-text');
@@ -82,6 +92,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const copilotInputForm = document.getElementById('copilot-input-form');
     const copilotInput = document.getElementById('copilot-input');
     const copilotSend = document.getElementById('copilot-send');
+    const videoLauncher = document.getElementById('video-launcher');
+    const videoLauncherTitle = document.getElementById('video-launcher-title');
+    const videoLauncherSummary = document.getElementById('video-launcher-summary');
+    const videoModal = document.getElementById('video-modal');
+    const videoSetupForm = document.getElementById('video-setup-form');
+    const videoModalClose = document.getElementById('video-modal-close');
+    const videoCancel = document.getElementById('video-cancel');
 
     // State
     let selectedFile = null;
@@ -92,6 +109,45 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentVersion = 0;
     let chatBusy = false;
     let generationBusy = false;
+    let originalImageUrl = null;
+    const videoDrafts = new Map();
+    let videoReturnFocus = null;
+
+    const videoOptionLabels = {
+        speed: {
+            gentle: '慢慢散步',
+            natural: '自然步行',
+            brisk: '輕快前進',
+        },
+        format: {
+            landscape: '橫式',
+            portrait: '直式',
+        },
+    };
+
+    function setComparisonPosition(value) {
+        const position = Math.min(100, Math.max(0, Number(value)));
+        comparisonViewer.style.setProperty('--comparison-position', `${position}%`);
+        comparisonRange.value = String(position);
+        comparisonRange.setAttribute(
+            'aria-valuetext',
+            `改造前 ${position}%，改造後 ${100 - position}%`
+        );
+        beforeLabel.style.opacity = position < 12 ? '0' : '1';
+        afterLabel.style.opacity = position > 88 ? '0' : '1';
+    }
+
+    function setBeforeImage(file) {
+        if (originalImageUrl) URL.revokeObjectURL(originalImageUrl);
+        originalImageUrl = URL.createObjectURL(file);
+        beforeImage.src = originalImageUrl;
+        setComparisonPosition(50);
+    }
+
+    comparisonRange.addEventListener('input', (event) => {
+        setComparisonPosition(event.target.value);
+    });
+    setComparisonPosition(50);
 
     // ===== Upload handling =====
     dropZone.addEventListener('dragover', (e) => {
@@ -121,6 +177,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         selectedFile = file;
+        setBeforeImage(file);
         const reader = new FileReader();
         reader.onload = (e) => {
             imagePreview.src = e.target.result;
@@ -151,6 +208,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function resetFile() {
         selectedFile = null;
+        if (originalImageUrl) URL.revokeObjectURL(originalImageUrl);
+        originalImageUrl = null;
+        beforeImage.src = '';
         fileInput.value = '';
         imagePreview.src = '';
         uploadContent.classList.remove('hidden');
@@ -199,6 +259,7 @@ document.addEventListener('DOMContentLoaded', () => {
         generationBusy = true;
         updateGenerateState();
         openResultPanel();
+        setComparisonPosition(50);
         const providerName = providerInput.value === 'openai' ? 'OpenAI' : 'Gemini';
         setLoading(true, `${providerName} 正在描繪你的新街道...`);
 
@@ -253,12 +314,96 @@ document.addEventListener('DOMContentLoaded', () => {
         } finally {
             generationBusy = false;
             updateGenerateState();
+            updateVideoLauncher();
         }
     });
 
     closeResultBtn.addEventListener('click', () => {
+        closeVideoSetup();
         resultSection.classList.add('hidden');
     });
+
+    // ===== Walk-through video setup (phase 1: interface + saved draft) =====
+    videoLauncher.addEventListener('click', () => {
+        if (videoLauncher.disabled || !versions[currentVersion]) return;
+        const version = versions[currentVersion].version;
+        const draft = videoDrafts.get(version);
+        if (draft) {
+            setCheckedVideoOption('video-speed', draft.speed);
+            setCheckedVideoOption('video-duration', draft.duration);
+            setCheckedVideoOption('video-format', draft.format);
+        }
+        videoReturnFocus = document.activeElement;
+        videoModal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+        videoModalClose.focus();
+    });
+
+    videoModalClose.addEventListener('click', closeVideoSetup);
+    videoCancel.addEventListener('click', closeVideoSetup);
+    videoModal.addEventListener('click', (event) => {
+        if (event.target === videoModal) closeVideoSetup();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !videoModal.classList.contains('hidden')) {
+            closeVideoSetup();
+        }
+    });
+
+    videoSetupForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const activeVersion = versions[currentVersion];
+        if (!activeVersion) return;
+        const formData = new FormData(videoSetupForm);
+        videoDrafts.set(activeVersion.version, {
+            speed: formData.get('video-speed'),
+            duration: formData.get('video-duration'),
+            format: formData.get('video-format'),
+        });
+        updateVideoLauncher();
+        closeVideoSetup();
+    });
+
+    function setCheckedVideoOption(name, value) {
+        const input = videoSetupForm.querySelector(
+            `input[name="${name}"][value="${value}"]`
+        );
+        if (input) input.checked = true;
+    }
+
+    function closeVideoSetup() {
+        if (videoModal.classList.contains('hidden')) return;
+        videoModal.classList.add('hidden');
+        document.body.style.overflow = '';
+        if (videoReturnFocus && document.contains(videoReturnFocus)) {
+            videoReturnFocus.focus();
+        }
+        videoReturnFocus = null;
+    }
+
+    function updateVideoLauncher() {
+        const activeVersion = versions[currentVersion];
+        videoLauncher.disabled = generationBusy || !activeVersion;
+        if (!activeVersion) {
+            videoLauncherTitle.textContent = '滿意這一版？製作街道漫遊影片';
+            videoLauncherSummary.textContent = '以第一人稱沿著新街道向前走';
+            return;
+        }
+
+        const draft = videoDrafts.get(activeVersion.version);
+        if (!draft) {
+            videoLauncherTitle.textContent = '滿意這一版？製作街道漫遊影片';
+            videoLauncherSummary.textContent = `從 v${activeVersion.version} 建立第一人稱漫遊`;
+            return;
+        }
+
+        videoLauncherTitle.textContent = `v${activeVersion.version} 漫遊影片設定完成`;
+        videoLauncherSummary.textContent = [
+            videoOptionLabels.speed[draft.speed],
+            `${draft.duration} 秒`,
+            videoOptionLabels.format[draft.format],
+        ].join(' · ');
+    }
 
     // ===== Co-pilot chat =====
     copilotInputForm.addEventListener('submit', (e) => {
@@ -377,6 +522,7 @@ document.addEventListener('DOMContentLoaded', () => {
         resultImage.src = v.image_url;
         roundBadge.textContent = `共創回合 ${v.version}`;
         renderVersionStrip();
+        updateVideoLauncher();
     }
 
     function openResultPanel() {
@@ -388,9 +534,15 @@ document.addEventListener('DOMContentLoaded', () => {
             if (text) loadingText.textContent = text;
             loadingOverlay.classList.remove('hidden');
             resultImage.classList.add('hidden');
+            videoLauncher.disabled = true;
         } else {
             loadingOverlay.classList.add('hidden');
             resultImage.classList.remove('hidden');
+            updateVideoLauncher();
         }
     }
+
+    window.addEventListener('beforeunload', () => {
+        if (originalImageUrl) URL.revokeObjectURL(originalImageUrl);
+    });
 });
