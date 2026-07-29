@@ -1,0 +1,28 @@
+{
+  "bundle_version": "1.0.0",
+  "synced_on": "2026-07-29",
+  "source_skill": "design-human-centered-streets",
+  "license_note": "Derived structured facts and metadata only; no source PDFs or copyrighted figure images are bundled.",
+  "files": {
+    "rules.jsonl": {
+      "bytes": 143313,
+      "sha256": "91b43c2155631b1a44ad93a0454c7ad5264fe51f8063c423b0240d8c02a1b002"
+    },
+    "knowledge-cards.jsonl": {
+      "bytes": 23091,
+      "sha256": "a7e6113a1190a3ad7c6d914d11db6452bb13ac74225bb24d4191b83f1ee64dfe"
+    },
+    "manuals.json": {
+      "bytes": 77971,
+      "sha256": "d683d2f302d795bb6eaae0fffcc36abefb3845bf146d31b50d860ecb838882fb"
+    },
+    "terms.json": {
+      "bytes": 8992,
+      "sha256": "d970acb8ddace6fe5a2e5a56175d441a791782c9ef44acd9c115cb255e74ee31"
+    },
+    "pdf-sources.json": {
+      "bytes": 9735,
+      "sha256": "d6b4806b6ecbf53d7d087706b56819f95513afb57c39eb34968635ade96c84e4"
+    }
+  }
+}

@@ -21,7 +21,7 @@ import uuid
 
 # Bumped by hand on each deploy-worthy change — /api/diag reports it, so we
 # can tell at a glance whether the running instance actually has a fix.
-CODE_VERSION = '2026-07-27-openai-image2'
+CODE_VERSION = '2026-07-29-knowledge-runtime1'
 
 def rss_mb():
     """Resident memory of this worker, in MB (Linux)."""
@@ -34,18 +34,28 @@ def rss_mb():
 if sys.version_info < (3, 10):
     try:
         import importlib.metadata
+
         import importlib_metadata
         importlib.metadata.packages_distributions = importlib_metadata.packages_distributions
     except ImportError:
         pass
 
-from flask import Flask, render_template, request, jsonify, url_for, Response, g
+from dotenv import load_dotenv
+from flask import Flask, Response, g, jsonify, render_template, request, url_for
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
 from PIL import Image, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
+
+from knowledge_base.knowledge_runtime import (
+    build_design_spec,
+    build_visual_audit_checklist,
+    compile_generation_prompt,
+    normalize_preferences,
+    public_design_spec,
+    refine_design_spec,
+)
 
 try:
     from openai import OpenAI
@@ -117,6 +127,7 @@ def _env_int(name, default, minimum=1, maximum=None):
 
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_MASK_BYTES = 4 * 1024 * 1024
 MAX_IMAGE_PIXELS = 24_000_000
 MAX_PROMPT_CHARS = 2_000
 MAX_CHAT_CHARS = 1_000
@@ -500,6 +511,49 @@ def _validate_uploaded_image(file):
     return image_bytes, mime_type
 
 
+def _validate_edit_mask(file, reference_image_bytes):
+    """Validate and normalize an optional user-drawn image-edit mask.
+
+    The returned PNG has the same dimensions as the reference image. Opaque
+    pixels are preserved and transparent pixels are the requested edit area.
+    """
+    mask_bytes = file.read(MAX_MASK_BYTES + 1)
+    if not mask_bytes:
+        raise ValueError('改造範圍遮罩是空的。')
+    if len(mask_bytes) > MAX_MASK_BYTES:
+        raise ValueError('改造範圍遮罩不可超過 4 MB。')
+
+    try:
+        with Image.open(io.BytesIO(reference_image_bytes)) as reference:
+            reference_size = reference.size
+        with Image.open(io.BytesIO(mask_bytes)) as mask:
+            if (mask.format or '').upper() != 'PNG':
+                raise ValueError('改造範圍遮罩必須是 PNG。')
+            if mask.size != reference_size:
+                raise ValueError('改造範圍遮罩必須與上傳圖片尺寸一致。')
+            if 'A' not in mask.getbands():
+                raise ValueError('改造範圍遮罩必須包含透明區域。')
+            normalized = mask.convert('RGBA')
+            alpha = normalized.getchannel('A')
+            minimum_alpha, maximum_alpha = alpha.getextrema()
+            if minimum_alpha == 255:
+                raise ValueError('請先在照片上畫出希望 AI 改造的範圍。')
+            if maximum_alpha == 0:
+                raise ValueError('遮罩不可把整張照片都設為可改造。')
+            output = io.BytesIO()
+            normalized.save(output, format='PNG', optimize=True)
+            return output.getvalue()
+    except ValueError:
+        raise
+    except (
+        Image.DecompressionBombError,
+        UnidentifiedImageError,
+        OSError,
+        SyntaxError,
+    ) as e:
+        raise ValueError('改造範圍遮罩不是有效的 PNG 圖片。') from e
+
+
 IMAGE_PROVIDER_LABELS = {
     'gemini': 'Google Gemini',
     'openai': 'OpenAI GPT Image',
@@ -592,11 +646,27 @@ def _openai_image_settings(image_bytes, resolution):
     return size, quality
 
 
-def _generate_gemini_image(image_bytes, mime_type, prompt_text, resolution):
+def _generate_gemini_image(
+    image_bytes,
+    mime_type,
+    prompt_text,
+    resolution,
+    mask_bytes=None,
+):
     transformation_parts = [
         types.Part.from_text(text=prompt_text),
         types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
     ]
+    if mask_bytes:
+        transformation_parts.extend([
+            types.Part.from_text(text=(
+                "The next PNG is an edit-area guide aligned to the reference "
+                "image. Transparent pixels identify the area requested for "
+                "street-level changes; opaque white pixels should be preserved. "
+                "Treat it as guidance and still preserve buildings and viewpoint."
+            )),
+            types.Part.from_bytes(data=mask_bytes, mime_type='image/png'),
+        ])
     kwargs = dict(
         model=GEMINI_IMAGE_MODEL,
         contents=[types.Content(role='user', parts=transformation_parts)]
@@ -617,7 +687,13 @@ def _generate_gemini_image(image_bytes, mime_type, prompt_text, resolution):
     return None
 
 
-def _generate_openai_image(image_bytes, mime_type, prompt_text, resolution):
+def _generate_openai_image(
+    image_bytes,
+    mime_type,
+    prompt_text,
+    resolution,
+    mask_bytes=None,
+):
     size, quality = _openai_image_settings(image_bytes, resolution)
     supported_extensions = {
         'image/jpeg': '.jpg',
@@ -638,7 +714,7 @@ def _generate_openai_image(image_bytes, mime_type, prompt_text, resolution):
 
     upload = io.BytesIO(image_bytes)
     upload.name = f'reference{extension}'
-    response = openai_client.images.edit(
+    request_args = dict(
         model=OPENAI_IMAGE_MODEL,
         image=upload,
         prompt=prompt_text,
@@ -646,6 +722,11 @@ def _generate_openai_image(image_bytes, mime_type, prompt_text, resolution):
         quality=quality,
         output_format='png',
     )
+    if mask_bytes:
+        mask_upload = io.BytesIO(mask_bytes)
+        mask_upload.name = 'edit-mask.png'
+        request_args['mask'] = mask_upload
+    response = openai_client.images.edit(**request_args)
     if not response.data or not response.data[0].b64_json:
         return None
     return base64.b64decode(response.data[0].b64_json, validate=True)
@@ -657,18 +738,29 @@ def _generate_image_from_reference(
     prompt_text,
     resolution='2K',
     provider='gemini',
+    mask_bytes=None,
 ):
     """Dispatch one image edit to the provider selected by the user."""
     if provider == 'gemini':
         if not client:
             raise RuntimeError('Gemini image provider is not configured')
         return _generate_gemini_image(
-            image_bytes, mime_type, prompt_text, resolution)
+            image_bytes,
+            mime_type,
+            prompt_text,
+            resolution,
+            mask_bytes=mask_bytes,
+        )
     if provider == 'openai':
         if not openai_client:
             raise RuntimeError('OpenAI image provider is not configured')
         return _generate_openai_image(
-            image_bytes, mime_type, prompt_text, resolution)
+            image_bytes,
+            mime_type,
+            prompt_text,
+            resolution,
+            mask_bytes=mask_bytes,
+        )
     raise ValueError(f'Unsupported image provider: {provider}')
 
 
@@ -759,18 +851,139 @@ def _copilot_generate_json(parts):
     raise last_err
 
 
-def _generate_copilot_greeting(image_bytes, mime_type, user_prompt):
-    """Have 小綠 review the new image and craft a welcome message + suggestions."""
+def _pending_visual_audit(design_spec):
+    return {
+        'status': 'not_run',
+        'score': None,
+        'summary': '尚未完成模型視覺稽核，請由使用者與設計專業者共同確認。',
+        'checks': build_visual_audit_checklist(design_spec or {}),
+        'disclaimer': (
+            '只檢查畫面可見的一致性與合理性，不代表尺寸量測、'
+            '法規符合或工程可施工性已獲確認。'
+        ),
+    }
+
+
+def _normalize_visual_audit(data, design_spec):
+    fallback = _pending_visual_audit(design_spec)
+    if not isinstance(data, dict):
+        return fallback
+
+    expected = {
+        item['id']: item for item in build_visual_audit_checklist(design_spec)
+    }
+    model_checks = {
+        str(item.get('id')): item
+        for item in data.get('checks', [])
+        if isinstance(item, dict)
+    }
+    checks = []
+    for check_id, base in expected.items():
+        model_check = model_checks.get(check_id, {})
+        status = model_check.get('status')
+        if status not in ('pass', 'warning', 'fail'):
+            status = 'warning'
+        checks.append({
+            'id': check_id,
+            'label': base['label'],
+            'status': status,
+            'note': str(model_check.get('note') or '')[:240],
+        })
+
+    try:
+        score = int(data.get('score'))
+    except (TypeError, ValueError):
+        score = None
+    if score is not None:
+        score = max(0, min(100, score))
+    return {
+        'status': 'reviewed',
+        'score': score,
+        'summary': str(data.get('summary') or '已完成畫面初步檢查。')[:400],
+        'checks': checks,
+        'disclaimer': fallback['disclaimer'],
+    }
+
+
+def _visual_audit_prompt(design_spec):
+    checklist = build_visual_audit_checklist(design_spec)
+    interventions = '；'.join(
+        design_spec.get('requested_interventions', [])
+    )
+    check_lines = '\n'.join(
+        f"- {item['id']}: {item['label']}" for item in checklist
+    )
+    return f"""你是街道設計概念圖的視覺稽核員。只依附圖中可見內容檢查，
+不可宣稱已量測尺寸、符合法規或可直接施工。
+
+設計目標：{design_spec.get('design_label', '人本街道改善')}
+應清楚呈現：{interventions}
+
+逐項檢查：
+{check_lines}
+
+只回 JSON：
+{{
+  "score": 0到100的整數,
+  "summary": "繁體中文總結，最多兩句",
+  "checks": [
+    {{"id":"preservation","status":"pass|warning|fail","note":"可見依據"}},
+    {{"id":"requested_change","status":"pass|warning|fail","note":"可見依據"}},
+    {{"id":"continuity","status":"pass|warning|fail","note":"可見依據"}},
+    {{"id":"accessibility","status":"pass|warning|fail","note":"可見依據"}},
+    {{"id":"realism","status":"pass|warning|fail","note":"可見依據"}}
+  ]
+}}"""
+
+
+def _audit_generated_design(image_bytes, mime_type, design_spec):
+    fallback = _pending_visual_audit(design_spec)
+    if not client:
+        return fallback
+    try:
+        small_bytes, small_mime = _shrink_for_llm(image_bytes)
+        data = _copilot_generate_json([
+            types.Part.from_text(text=_visual_audit_prompt(design_spec)),
+            types.Part.from_bytes(data=small_bytes, mime_type=small_mime),
+        ])
+        return _normalize_visual_audit(data, design_spec)
+    except Exception as e:
+        print(f"Visual audit failed: {e}")
+        return fallback
+
+
+def _generate_copilot_greeting(
+    image_bytes,
+    mime_type,
+    user_prompt,
+    design_spec=None,
+):
+    """Review the new image and craft a greeting plus visual audit."""
+    pending_audit = _pending_visual_audit(design_spec or {})
     fallback = {
         'message': '嗨，我是小綠 🌱 第一版設計出來了！你覺得整體感覺如何？想往哪個方向繼續調整？',
-        'suggestions': ['再加一些樹', '加點街頭藝術', '換成夜景氛圍']
+        'suggestions': ['再加一些樹', '加點街頭藝術', '換成夜景氛圍'],
+        'audit': pending_audit,
     }
     if not client:
         return fallback
     try:
         # str.replace, NOT str.format — the template's JSON example braces
         # make .format() raise KeyError on every single call.
-        prompt = GREETING_SYSTEM_PROMPT.replace('{user_prompt}', user_prompt or "讓街道更宜居")
+        prompt = GREETING_SYSTEM_PROMPT.replace(
+            '{user_prompt}',
+            user_prompt or "讓街道更宜居",
+        )
+        if design_spec:
+            prompt += (
+                "\n\n請在同一份 JSON 另外加入 visual_audit 物件。"
+                "\n"
+                + _visual_audit_prompt(design_spec)
+                + "\n最外層格式為："
+                '{"message":"...","suggestions":["..."],'
+                '"visual_audit":{"score":80,"summary":"...",'
+                '"checks":[...]}}'
+            )
         small_bytes, small_mime = _shrink_for_llm(image_bytes)
         parts = [
             types.Part.from_text(text=prompt),
@@ -779,7 +992,11 @@ def _generate_copilot_greeting(image_bytes, mime_type, user_prompt):
         data = _copilot_generate_json(parts)
         return {
             'message': data.get('message', fallback['message']),
-            'suggestions': data.get('suggestions', fallback['suggestions'])[:3]
+            'suggestions': data.get('suggestions', fallback['suggestions'])[:3],
+            'audit': _normalize_visual_audit(
+                data.get('visual_audit'),
+                design_spec,
+            ) if design_spec else pending_audit,
         }
     except Exception as e:
         print(f"Greeting generation failed: {e}")
@@ -889,6 +1106,12 @@ def _serialize_session(session):
         'versions': versions,
         'history': history,
         'initial_prompt': str(session.get('initial_prompt') or ''),
+        'design_spec': session.get('design_spec')
+        if isinstance(session.get('design_spec'), dict)
+        else {},
+        'audit': session.get('audit')
+        if isinstance(session.get('audit'), dict)
+        else {},
         'resolution': str(session.get('resolution') or '2K'),
         'provider': str(session.get('provider') or 'gemini'),
         'version_count': int(
@@ -941,10 +1164,18 @@ def _deserialize_session(raw):
         if isinstance(turn, dict)
     ]
     now = time.time()
+    design_spec = payload.get('design_spec')
+    if not isinstance(design_spec, dict):
+        design_spec = {}
+    audit = payload.get('audit')
+    if not isinstance(audit, dict):
+        audit = {}
     return {
         'versions': versions,
         'history': history,
         'initial_prompt': str(payload.get('initial_prompt') or ''),
+        'design_spec': design_spec,
+        'audit': audit,
         'resolution': str(payload.get('resolution') or '2K'),
         'provider': str(payload.get('provider') or 'gemini'),
         'version_count': max(
@@ -1318,6 +1549,68 @@ def index():
     )
 
 
+def _preferences_from_payload(payload):
+    if not isinstance(payload, dict):
+        return normalize_preferences({})
+    nested = payload.get('design_preferences')
+    if isinstance(nested, dict):
+        return normalize_preferences(nested)
+    return normalize_preferences(payload)
+
+
+@app.route('/api/design-plan', methods=['POST'])
+def create_design_plan():
+    """Retrieve a small, reviewable set of street-design evidence."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _api_error(
+            '設計計畫需要 JSON 格式的需求。',
+            400,
+            'design_plan_invalid',
+        )
+    custom_prompt = str(payload.get('custom_prompt') or '').strip()
+    preset_id = str(payload.get('preset_id') or '').strip()
+    if not custom_prompt:
+        return _api_error(
+            '請描述你想進行的街道改造。',
+            400,
+            'prompt_required',
+        )
+    if len(custom_prompt) > MAX_PROMPT_CHARS:
+        return _api_error(
+            f'改造描述不可超過 {MAX_PROMPT_CHARS} 個字元。',
+            400,
+            'prompt_too_long',
+        )
+    if preset_id and preset_id not in PRESET_STYLE_KEYS:
+        return _api_error(
+            '不支援的快捷改造選項。',
+            400,
+            'preset_invalid',
+        )
+    try:
+        spec = build_design_spec(
+            custom_prompt,
+            preset_id,
+            _preferences_from_payload(payload),
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        print(
+            f"[{g.request_id}] knowledge runtime unavailable: "
+            f"{e.__class__.__name__}: {e}"
+        )
+        return _api_error(
+            '街道設計知識庫暫時無法使用。',
+            503,
+            'knowledge_runtime_unavailable',
+        )
+    return jsonify({
+        'status': 'success',
+        'design_spec': public_design_spec(spec),
+        'generation_prompt': compile_generation_prompt(spec),
+    })
+
+
 @app.route('/health')
 def health():
     """Lightweight liveness endpoint for Render health checks."""
@@ -1499,6 +1792,7 @@ def transform_image():
     preset_id = (request.form.get('preset_id') or '').strip()
     resolution = request.form.get('resolution', '2K')
     provider = (request.form.get('provider') or 'gemini').strip().lower()
+    raw_preferences = request.form.get('design_preferences') or '{}'
     if not custom_prompt:
         return _api_error(
             '請描述你想進行的街道改造。',
@@ -1532,6 +1826,16 @@ def transform_image():
         )
     if resolution not in ('1K', '2K', '4K'):
         resolution = '2K'
+    try:
+        design_preferences = normalize_preferences(
+            json.loads(raw_preferences)
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return _api_error(
+            '街道情境設定格式不正確，請重新確認設計計畫。',
+            400,
+            'design_preferences_invalid',
+        )
 
     if not file or file.filename == '':
         return _api_error(
@@ -1550,94 +1854,36 @@ def transform_image():
     except ValueError as e:
         return _api_error(str(e), 400, 'image_invalid')
     
-    # Load Taiwan human-centered street design knowledge (curated markdown).
-    # Style intro + the english "quick reference card" go into the prompt;
-    # the negative-cue section gets merged into negative_prompt below.
-    kb_style_intro, kb_positive_cues, kb_negative_cues = load_taiwan_knowledge()
-    knowledge_context_parts = []
-    if kb_style_intro:
-        knowledge_context_parts.append("[Overall Taiwan Street Style]\n" + kb_style_intro)
-    if kb_positive_cues:
-        knowledge_context_parts.append("[Concrete Visual Rules]\n" + kb_positive_cues)
-    knowledge_context = "\n\n".join(knowledge_context_parts)
-    
-    # Try to match specific Design Prompt from Libraries
-    # (Checking against keys in our new dictionaries)
-    specialized_prompt = None
-    negative_prompt = None
-    
-    # Import locally to avoid top-level path issues if file missing
+    mask_bytes = None
+    mask_file = request.files.get('mask')
+    if mask_file and mask_file.filename:
+        try:
+            mask_bytes = _validate_edit_mask(mask_file, image_bytes)
+        except ValueError as e:
+            return _api_error(str(e), 400, 'mask_invalid')
+
     try:
-        knowledge_path = os.path.join(app.root_path, 'knowledge_base')
-        if knowledge_path not in sys.path:
-            sys.path.append(knowledge_path)
-        from street_prompt_data_taiwan import get_taiwan_design_prompt
-        from street_prompt_data_full import get_set_design_prompt
-        
-        # Check if custom_prompt matches a key (exact or partial)
-        # For this demo, let's assume the user might type the exact key or we use the specific logic
-        # Ideally, frontend would send a 'style_key'
-        
-        # Let's try to match strict keys first, or use the custom prompt as is
-        # If the user selected a preset from UI, it might be in 'prompt_type' or 'custom_prompt'
-        # The current UI sends 'custom_prompt' as the main text.
-        
-        # We will try to see if the custom_prompt *is* a key in our dictionaries
-        option_key = PRESET_STYLE_KEYS.get(preset_id, custom_prompt)
-        p1, np1 = get_taiwan_design_prompt(option_key, custom_prompt)
-        if p1:
-            specialized_prompt = p1
-            negative_prompt = np1
-        else:
-            p2, np2 = get_set_design_prompt(option_key, custom_prompt)
-            if p2:
-                specialized_prompt = p2
-                negative_prompt = np2
-                
-    except ImportError as e:
-        print(f"Could not import prompt libraries: {e}")
+        design_spec = build_design_spec(
+            custom_prompt,
+            preset_id,
+            design_preferences,
+        )
+        full_prompt = compile_generation_prompt(design_spec)
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        print(
+            f"[{g.request_id}] knowledge runtime unavailable: "
+            f"{e.__class__.__name__}: {e}"
+        )
+        return _api_error(
+            '街道設計知識庫暫時無法使用。',
+            503,
+            'knowledge_runtime_unavailable',
+        )
 
-    # Merge curated Taiwan negative cues into whatever negative_prompt the
-    # preset matcher produced (if any). Preset wins on top, KB cues append.
-    if kb_negative_cues:
-        if negative_prompt:
-            negative_prompt = f"{negative_prompt}\n{kb_negative_cues}"
-        else:
-            negative_prompt = kb_negative_cues
-
-    # Construct prompt
-    if specialized_prompt:
-        # Use the highly structured specialized prompt
-        full_prompt = specialized_prompt
-        if knowledge_context:
-             full_prompt += f"\n\n[Additional Context from Knowledge Base Files]:\n{knowledge_context}"
-    else:
-        # Fallback to the generic robust prompt (Role -> User -> Context -> Style)
-        full_prompt = f"""
-        ## ROLE
-        You are an expert AI Urban Planner and Street Designer specialized in transforming street views.
-
-        ## USER REQUEST (PRIMARY GOAL - MANDATORY)
-        The user wants to transform this street view with the following specific vision:
-        "{custom_prompt if custom_prompt else "Modern city street transformation"}"
-        
-        CRITICAL INSTRUCTION: You MUST prioritize this User Request above all else. If they ask for a specific element (e.g., "bike lane"), it MUST be visible.
-
-        ## DESIGN GUIDELINES (CONTEXT - REFERENCE)
-        Use the following principles from the knowledge base to guide the details of your design:
-        --------------------------------------------------
-        {knowledge_context if knowledge_context else "No specific guidelines provided."}
-        --------------------------------------------------
-
-        ## OUTPUT STYLE
-        - Photorealistic, high-resolution, architectural visualization.
-        - Natural lighting, realistic shadows and textures.
-        - The perspective must match the original image exactly.
-        """
-    
     print(
         f"[{g.request_id}] prompt ready "
-        f"(provider={provider}, chars={len(full_prompt)})"
+        f"(provider={provider}, evidence={len(design_spec['evidence'])}, "
+        f"chars={len(full_prompt)}, mask={bool(mask_bytes)})"
     )
 
     try:
@@ -1662,9 +1908,6 @@ CRITICAL INSTRUCTIONS:
 
 The result should look like the same street, same buildings, same view - just with the requested street changes applied."""
 
-        if negative_prompt:
-            prompt_text += f"\n\nDO NOT include: {negative_prompt}"
-
         if not GEN_LOCK.acquire(blocking=False):
             return _api_error(
                 '另一張圖正在生成中，免費主機一次只能畫一張——等它畫完再試一次 🌱',
@@ -1685,6 +1928,7 @@ The result should look like the same street, same buildings, same view - just wi
                 prompt_text,
                 resolution=resolution,
                 provider=provider,
+                mask_bytes=mask_bytes,
             )
         finally:
             GEN_LOCK_HELD = False
@@ -1711,6 +1955,8 @@ The result should look like the same street, same buildings, same view - just wi
                 'versions': [version_meta],
                 'history': [],
                 'initial_prompt': custom_prompt or '',
+                'design_spec': public_design_spec(design_spec),
+                'audit': _pending_visual_audit(design_spec),
                 'resolution': resolution,
                 'provider': provider,
                 'version_count': 1,
@@ -1727,8 +1973,16 @@ The result should look like the same street, same buildings, same view - just wi
 
         # Ask 小綠 to write a greeting, reusing the already-shrunk copy
         greeting = _generate_copilot_greeting(
-            version_meta['bytes'], version_meta.get('mime_type', 'image/jpeg'), custom_prompt or '')
+            version_meta['bytes'],
+            version_meta.get('mime_type', 'image/jpeg'),
+            custom_prompt or '',
+            design_spec,
+        )
         with SESSIONS_LOCK:
+            SESSIONS[session_id]['audit'] = greeting.get(
+                'audit',
+                _pending_visual_audit(design_spec),
+            )
             _append_history_locked(
                 SESSIONS[session_id],
                 'assistant',
@@ -1743,6 +1997,12 @@ The result should look like the same street, same buildings, same view - just wi
             'version': 1,
             'image_url': generated_url,
             'provider': provider,
+            'mask_applied': bool(mask_bytes),
+            'design_spec': public_design_spec(design_spec),
+            'audit': greeting.get(
+                'audit',
+                _pending_visual_audit(design_spec),
+            ),
             'copilot': {
                 'message': greeting['message'],
                 'suggestions': greeting['suggestions'],
@@ -1872,24 +2132,22 @@ def _chat_with_session(session_id, session, user_message):
         'intent': decision['intent'],
         'message': decision['message'],
         'suggestions': decision['suggestions'],
+        'design_spec': session.get('design_spec') or {},
+        'audit': session.get('audit') or {},
     }
 
     if decision['intent'] == 'refine' and decision['refine_prompt']:
         refine_prompt = decision['refine_prompt']
-        original_prompt = session.get('initial_prompt') or ''
-        full_prompt = f"""Apply the following refinement to this street view image.
-
-USER'S NEW REQUEST (HIGHEST PRIORITY):
-{refine_prompt}
-
-ORIGINAL VISION (context only):
-{original_prompt or 'Improve the street design.'}
-
-CRITICAL INSTRUCTIONS:
-- PRESERVE all buildings, architecture, facades exactly
-- PRESERVE camera perspective and viewpoint exactly
-- ONLY adjust street-level elements as instructed
-- Photorealistic quality, consistent lighting"""
+        current_spec = session.get('design_spec')
+        if not isinstance(current_spec, dict) or not current_spec:
+            current_spec = build_design_spec(
+                session.get('initial_prompt') or '改善街道人本環境',
+            )
+        updated_spec = refine_design_spec(current_spec, refine_prompt)
+        full_prompt = compile_generation_prompt(
+            updated_spec,
+            refinement_text=refine_prompt,
+        )
         if not GEN_LOCK.acquire(blocking=False):
             return _api_error(
                 '另一張圖正在生成中，請等它完成後再調整。',
@@ -1936,9 +2194,16 @@ CRITICAL INSTRUCTIONS:
             version_num,
             new_image_bytes,
         )
+        audit = _audit_generated_design(
+            new_meta['bytes'],
+            new_meta.get('mime_type', 'image/jpeg'),
+            updated_spec,
+        )
         with SESSIONS_LOCK:
             session['version_count'] = version_num
             session['versions'].append(new_meta)
+            session['design_spec'] = public_design_spec(updated_spec)
+            session['audit'] = audit
             if len(session['versions']) > MAX_SESSION_VERSIONS:
                 del session['versions'][:-MAX_SESSION_VERSIONS]
             _append_history_locked(
@@ -1949,6 +2214,8 @@ CRITICAL INSTRUCTIONS:
         result.update({
             'image_url': new_url,
             'version': version_num,
+            'design_spec': public_design_spec(updated_spec),
+            'audit': audit,
         })
     else:
         with SESSIONS_LOCK:

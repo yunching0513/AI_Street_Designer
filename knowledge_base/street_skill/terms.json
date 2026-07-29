@@ -1,0 +1,250 @@
+{
+  "ontology_version": "0.1.0",
+  "updated_on": "2026-07-27",
+  "terms": [
+    {
+      "canonical_id": "bicycle_lane",
+      "label_en": "bicycle lane",
+      "label_zh_tw": "自行車道／自行車專用車道",
+      "aliases": {
+        "en": ["cycle lane", "painted cycle lane"],
+        "zh-TW": ["自行車專用道", "自行車專用車道"]
+      },
+      "broader": "bicycle_facility",
+      "do_not_equate_with": ["protected_cycle_track", "independent_bicycle_path"],
+      "notes": "On-road bicycle space; protection and legal definitions vary by jurisdiction."
+    },
+    {
+      "canonical_id": "protected_cycle_track",
+      "label_en": "protected cycle track",
+      "label_zh_tw": "實體分隔自行車道",
+      "aliases": {
+        "en": ["protected cycling space", "separated cycle track"],
+        "nl": ["vrijliggend fietspad"],
+        "de": ["geschützter Radweg"]
+      },
+      "broader": "bicycle_facility",
+      "do_not_equate_with": ["bicycle_lane"],
+      "notes": "Cycling space physically or vertically separated from motor traffic."
+    },
+    {
+      "canonical_id": "independent_bicycle_path",
+      "label_en": "independent bicycle path",
+      "label_zh_tw": "自行車專用道路",
+      "aliases": {
+        "en": ["independent cycle path"],
+        "zh-TW": ["獨立型自行車道"]
+      },
+      "broader": "bicycle_facility",
+      "do_not_equate_with": ["bicycle_lane"],
+      "notes": "A bicycle facility with an independent alignment or road status."
+    },
+    {
+      "canonical_id": "shared_use_path",
+      "label_en": "shared-use path",
+      "label_zh_tw": "人行與自行車共用道",
+      "aliases": {
+        "en": ["shared path", "shared pedestrian and cycle route"],
+        "zh-TW": ["自行車與行人共用道", "共用道", "共用道路"]
+      },
+      "broader": "active_travel_facility",
+      "do_not_equate_with": ["shared_street"],
+      "notes": "A path shared by people walking and cycling; confirm whether a source distinguishes path and road forms."
+    },
+    {
+      "canonical_id": "sidewalk",
+      "label_en": "sidewalk",
+      "label_zh_tw": "人行道",
+      "aliases": {
+        "en": ["footway", "pavement"],
+        "nl": ["trottoir"],
+        "de": ["Gehweg"]
+      },
+      "broader": "pedestrian_facility",
+      "do_not_equate_with": ["pedestrian_clear_path"],
+      "notes": "The full pedestrian-side realm; the unobstructed clear path is usually narrower."
+    },
+    {
+      "canonical_id": "pedestrian_clear_path",
+      "label_en": "pedestrian clear path",
+      "label_zh_tw": "人行淨寬／無障礙通行淨寬",
+      "aliases": {
+        "en": ["clear walking zone", "pedestrian through zone"],
+        "zh-TW": ["通行淨寬", "人行通行空間"]
+      },
+      "broader": "pedestrian_facility",
+      "do_not_equate_with": ["sidewalk"],
+      "notes": "The continuous unobstructed part of a pedestrian facility."
+    },
+    {
+      "canonical_id": "curb_ramp",
+      "label_en": "curb ramp",
+      "label_zh_tw": "路緣斜坡",
+      "aliases": {
+        "en": ["dropped kerb", "kerb ramp"],
+        "zh-TW": ["緣石坡道", "路緣坡道"]
+      },
+      "broader": "accessibility_facility",
+      "do_not_equate_with": [],
+      "notes": "Transition between sidewalk and carriageway or crossing level."
+    },
+    {
+      "canonical_id": "bollard",
+      "label_en": "bollard",
+      "label_zh_tw": "車阻",
+      "aliases": {
+        "en": ["post"],
+        "zh-TW": ["阻車柱"]
+      },
+      "broader": "street_furniture",
+      "do_not_equate_with": [],
+      "notes": "A vertical access-control or protection element; it can itself create an accessibility hazard."
+    },
+    {
+      "canonical_id": "traffic_calming_zone",
+      "label_en": "traffic-calming zone",
+      "label_zh_tw": "交通寧靜區",
+      "aliases": {
+        "en": ["traffic-calmed area", "30 km/h zone"],
+        "zh-TW": ["交通寧靜區域"]
+      },
+      "broader": "street_management_area",
+      "do_not_equate_with": ["shared_street"],
+      "notes": "An area-based speed and street-management treatment; not every 30 km/h road is a shared street."
+    },
+    {
+      "canonical_id": "shared_street",
+      "label_en": "shared street",
+      "label_zh_tw": "共享街道",
+      "aliases": {
+        "en": ["living street", "shared space street"],
+        "nl": ["woonerf"],
+        "de": ["verkehrsberuhigter Bereich"]
+      },
+      "broader": "street_type",
+      "do_not_equate_with": ["shared_use_path", "traffic_calming_zone"],
+      "notes": "A street type where spatial and operating rules rebalance priority; legal definitions differ."
+    },
+    {
+      "canonical_id": "buffer_zone",
+      "label_en": "buffer zone",
+      "label_zh_tw": "緩衝空間",
+      "aliases": {
+        "en": ["separation strip", "lateral clearance"],
+        "zh-TW": ["分隔帶", "安全間距"]
+      },
+      "broader": "cross_section_element",
+      "do_not_equate_with": [],
+      "notes": "Lateral space separating a user from kerbs, parking, fixed objects, or traffic."
+    },
+    {
+      "canonical_id": "parking_bay",
+      "label_en": "parking bay",
+      "label_zh_tw": "停車位／停車帶",
+      "aliases": {
+        "en": ["car parking bay", "parking lane"],
+        "zh-TW": ["路邊停車格", "停車帶"]
+      },
+      "broader": "curb_zone",
+      "do_not_equate_with": ["loading_bay"],
+      "notes": "Space for stationary vehicles; door-zone risk needs an explicit cycling buffer."
+    },
+    {
+      "canonical_id": "loading_bay",
+      "label_en": "loading bay",
+      "label_zh_tw": "裝卸貨車位",
+      "aliases": {
+        "en": ["loading zone"],
+        "zh-TW": ["裝卸區", "貨運停靠區"]
+      },
+      "broader": "curb_zone",
+      "do_not_equate_with": ["parking_bay"],
+      "notes": "Curb space reserved for loading and servicing."
+    },
+    {
+      "canonical_id": "bus_lane",
+      "label_en": "bus lane",
+      "label_zh_tw": "公車專用道",
+      "aliases": {
+        "en": ["bus-only lane", "bus and cycle lane"],
+        "zh-TW": ["公車專用車道"]
+      },
+      "broader": "transit_facility",
+      "do_not_equate_with": [],
+      "notes": "Record whether cycling is legally and operationally permitted."
+    },
+    {
+      "canonical_id": "green_infrastructure",
+      "label_en": "green infrastructure",
+      "label_zh_tw": "綠色基盤",
+      "aliases": {
+        "en": ["green stormwater infrastructure", "nature-based drainage"],
+        "zh-TW": ["綠色基礎設施", "低衝擊開發設施"]
+      },
+      "broader": "street_system",
+      "do_not_equate_with": [],
+      "notes": "Vegetated and soil-based systems integrating drainage, ecology, shade, and public realm."
+    },
+    {
+      "canonical_id": "motor_vehicle_lane",
+      "label_en": "motor-vehicle lane",
+      "label_zh_tw": "汽車行駛車道",
+      "aliases": {
+        "en": ["general-purpose lane", "travel lane"],
+        "zh-TW": ["一般車道", "混合車流車道"]
+      },
+      "broader": "cross_section_element",
+      "do_not_equate_with": ["bus_lane", "bicycle_lane"],
+      "notes": "A general traffic lane; record transit and heavy-vehicle conditions separately."
+    },
+    {
+      "canonical_id": "bikeway_network",
+      "label_en": "bikeway network",
+      "label_zh_tw": "自行車路網",
+      "aliases": {
+        "en": ["bike network", "cycling network"],
+        "zh-TW": ["自行車道路網"]
+      },
+      "broader": "street_system",
+      "do_not_equate_with": ["bicycle_lane"],
+      "notes": "Connected routes and programs rather than an individual facility."
+    },
+    {
+      "canonical_id": "street_cross_section",
+      "label_en": "street cross-section",
+      "label_zh_tw": "道路橫斷面",
+      "aliases": {
+        "en": ["street section", "right-of-way allocation"],
+        "zh-TW": ["街道斷面", "路權橫斷面"]
+      },
+      "broader": "street_system",
+      "do_not_equate_with": [],
+      "notes": "The coordinated allocation of the full right-of-way."
+    },
+    {
+      "canonical_id": "street_material_palette",
+      "label_en": "street material palette",
+      "label_zh_tw": "街道材料系統",
+      "aliases": {
+        "en": ["public-realm material family", "standard material palette"],
+        "nl": ["materialenpalet"],
+        "zh-TW": ["街景材料家族"]
+      },
+      "broader": "street_system",
+      "do_not_equate_with": [],
+      "notes": "A coordinated family of paving, kerbs, furniture, lighting, and details."
+    },
+    {
+      "canonical_id": "engagement_process",
+      "label_en": "engagement process",
+      "label_zh_tw": "參與式設計流程",
+      "aliases": {
+        "en": ["co-design", "participatory design"],
+        "zh-TW": ["共同設計", "公民參與"]
+      },
+      "broader": "design_process",
+      "do_not_equate_with": [],
+      "notes": "Methods that incorporate lived experience into analysis, design, and evaluation."
+    }
+  ]
+}

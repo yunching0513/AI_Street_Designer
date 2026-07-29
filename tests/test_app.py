@@ -21,6 +21,16 @@ def make_png(width=1200, height=800):
     return output.getvalue()
 
 
+def make_mask(width=1200, height=800):
+    output = io.BytesIO()
+    mask = Image.new('RGBA', (width, height), (255, 255, 255, 255))
+    for x in range(width // 4, width // 2):
+        for y in range(height // 2, height * 3 // 4):
+            mask.putpixel((x, y), (255, 255, 255, 0))
+    mask.save(output, format='PNG')
+    return output.getvalue()
+
+
 def test_health_is_liveness_only(monkeypatch):
     monkeypatch.setattr(street_app, 'client', object())
     monkeypatch.setattr(street_app, 'openai_client', None)
@@ -54,6 +64,10 @@ def test_index_renders_both_provider_choices(monkeypatch):
     assert b'name="video-speed"' in response.data
     assert b'name="video-duration"' in response.data
     assert b'name="video-format"' in response.data
+    assert b'id="street-context"' in response.data
+    assert b'id="design-plan-panel"' in response.data
+    assert b'id="edit-mask-canvas"' in response.data
+    assert b'id="result-review"' in response.data
     assert '確認影片設定'.encode() in response.data
     assert response.headers['Cache-Control'] == 'no-store'
 
@@ -170,6 +184,74 @@ def test_openai_generation_uses_edit_api(monkeypatch):
     assert call['image'].name == 'reference.png'
 
 
+def test_openai_generation_passes_normalized_edit_mask(monkeypatch):
+    expected = b'generated-with-mask'
+    call = {}
+
+    class FakeImages:
+        def edit(self, **kwargs):
+            call.update(kwargs)
+            return SimpleNamespace(data=[
+                SimpleNamespace(
+                    b64_json=base64.b64encode(expected).decode('ascii')
+                )
+            ])
+
+    monkeypatch.setattr(
+        street_app,
+        'openai_client',
+        SimpleNamespace(images=FakeImages()),
+    )
+    reference = make_png()
+    mask = street_app._validate_edit_mask(
+        SimpleNamespace(read=lambda maximum: make_mask()),
+        reference,
+    )
+
+    result = street_app._generate_image_from_reference(
+        reference,
+        'image/png',
+        'Only edit the marked road area',
+        provider='openai',
+        mask_bytes=mask,
+    )
+
+    assert result == expected
+    assert call['mask'].name == 'edit-mask.png'
+    with Image.open(call['mask']) as mask_image:
+        assert mask_image.size == (1200, 800)
+        assert 'A' in mask_image.getbands()
+
+
+def test_design_plan_returns_retrieved_evidence_and_prompt():
+    response = street_app.app.test_client().post(
+        '/api/design-plan',
+        json={
+            'custom_prompt': '增加一條安全、連續的自行車道',
+            'preset_id': 'protected-bike-lane',
+            'design_preferences': {
+                'street_context': 'main_street',
+                'target_speed_kmh': 30,
+                'intervention_intensity': 'balanced',
+                'priorities': ['cycling', 'safety'],
+                'preserve': ['existing_trees'],
+            },
+        },
+    )
+
+    payload = response.get_json()
+    spec = payload['design_spec']
+    assert response.status_code == 200
+    assert 5 <= len(spec['evidence']) <= 12
+    assert spec['target_speed_kmh'] == 30
+    assert any(
+        item['manual_id'] == 'tw-urban-road-spec-2026'
+        for item in spec['evidence']
+    )
+    assert '[RETRIEVED DESIGN EVIDENCE]' in payload['generation_prompt']
+    assert 'concept image' in payload['generation_prompt']
+
+
 def test_transform_rejects_unconfigured_provider(monkeypatch):
     monkeypatch.setattr(street_app, 'openai_client', None)
 
@@ -241,6 +323,8 @@ def test_transform_keeps_provider_for_followup_edits(monkeypatch):
     payload = response.get_json()
     assert response.status_code == 200
     assert payload['provider'] == 'openai'
+    assert payload['design_spec']['status'] == 'concept'
+    assert 5 <= len(payload['design_spec']['evidence']) <= 12
     assert generation_call['provider'] == 'openai'
     assert street_app.SESSIONS[payload['session_id']]['provider'] == 'openai'
     assert persisted['session_id'] == payload['session_id']
@@ -423,6 +507,7 @@ def test_busy_session_rejects_parallel_chat(monkeypatch):
 
 def test_chat_caps_versions_and_keeps_monotonic_version(monkeypatch):
     persisted = {}
+    generation_prompt = {}
     monkeypatch.setattr(street_app, 'client', object())
     monkeypatch.setattr(
         street_app,
@@ -437,7 +522,20 @@ def test_chat_caps_versions_and_keeps_monotonic_version(monkeypatch):
     monkeypatch.setattr(
         street_app,
         '_generate_image_from_reference',
-        lambda *args, **kwargs: make_png(),
+        lambda *args, **kwargs: (
+            generation_prompt.update({'prompt': args[2]}) or make_png()
+        ),
+    )
+    monkeypatch.setattr(
+        street_app,
+        '_audit_generated_design',
+        lambda *args: {
+            'status': 'reviewed',
+            'score': 88,
+            'summary': '動線清楚',
+            'checks': [],
+            'disclaimer': '概念檢查',
+        },
     )
     monkeypatch.setattr(
         street_app,
@@ -490,6 +588,11 @@ def test_chat_caps_versions_and_keeps_monotonic_version(monkeypatch):
         'session_id': session_id,
         'version_count': 13,
     }
+    assert '[RETRIEVED DESIGN EVIDENCE]' in generation_prompt['prompt']
+    assert street_app.SESSIONS[session_id]['design_spec'][
+        'refinement_history'
+    ] == ['Add more trees']
+    assert response.get_json()['audit']['score'] == 88
 
 
 def test_session_serialization_round_trip_uses_json_and_recreates_lock():
@@ -502,6 +605,11 @@ def test_session_serialization_round_trip_uses_json_and_recreates_lock():
         }],
         'history': [{'role': 'assistant', 'message': '第一版完成'}],
         'initial_prompt': '增加樹木',
+        'design_spec': {
+            'status': 'concept',
+            'design_label': '綠色街道',
+        },
+        'audit': {'status': 'reviewed', 'score': 90},
         'resolution': '2K',
         'provider': 'openai',
         'version_count': 1,
@@ -518,6 +626,8 @@ def test_session_serialization_round_trip_uses_json_and_recreates_lock():
     assert restored['versions'][0]['bytes'] == image_bytes
     assert restored['provider'] == 'openai'
     assert restored['history'] == session['history']
+    assert restored['design_spec'] == session['design_spec']
+    assert restored['audit'] == session['audit']
     assert isinstance(restored['_operation_lock'], type(threading.Lock()))
 
 

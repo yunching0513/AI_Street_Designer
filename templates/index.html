@@ -41,6 +41,11 @@
                 </div>
                 <div class="preview-container hidden" id="preview-container">
                     <img id="image-preview" src="" alt="Preview">
+                    <canvas
+                        id="edit-mask-canvas"
+                        class="edit-mask-canvas hidden"
+                        aria-label="在照片上畫出希望 AI 改造的範圍"
+                    ></canvas>
                     <button class="remove-btn" id="remove-image">
                         <i class="fa-solid fa-times"></i>
                     </button>
@@ -108,8 +113,85 @@
                     <div class="input-wrapper">
                         <input type="text" id="custom-prompt" maxlength="2000" placeholder="例如：步行區、有咖啡店和露天座位...">
                         <button id="generate-btn" disabled>
-                            開始變變變 <span>✨</span>
+                            檢視設計計畫 <span>🔎</span>
                         </button>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>和小綠一起定義這條街 🤝</label>
+                    <div class="participation-card">
+                        <div class="participation-grid">
+                            <label>
+                                <span>街道情境</span>
+                                <select id="street-context">
+                                    <option value="auto">讓 AI 初步判讀</option>
+                                    <option value="main_street">主要街道</option>
+                                    <option value="residential">住宅生活街道</option>
+                                    <option value="school">通學環境</option>
+                                    <option value="transit_corridor">大眾運輸廊道</option>
+                                    <option value="urban_core">市中心街道</option>
+                                    <option value="neighbourhood">鄰里街道</option>
+                                </select>
+                            </label>
+                            <label>
+                                <span>希望傳達的目標速度</span>
+                                <select id="target-speed">
+                                    <option value="">不指定</option>
+                                    <option value="10">10 km/h</option>
+                                    <option value="20">20 km/h</option>
+                                    <option value="30">30 km/h</option>
+                                    <option value="40">40 km/h</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <fieldset class="participation-fieldset">
+                            <legend>改造幅度</legend>
+                            <div class="segmented-options">
+                                <label><input type="radio" name="intervention-intensity" value="light"><span>輕量改善</span></label>
+                                <label><input type="radio" name="intervention-intensity" value="balanced" checked><span>平衡改造</span></label>
+                                <label><input type="radio" name="intervention-intensity" value="transformative"><span>大幅重分配</span></label>
+                            </div>
+                        </fieldset>
+
+                        <fieldset class="participation-fieldset">
+                            <legend>優先照顧誰／什麼</legend>
+                            <div class="check-chip-grid" id="priority-options">
+                                <label><input type="checkbox" value="walking"><span>🚶 步行</span></label>
+                                <label><input type="checkbox" value="cycling"><span>🚲 自行車</span></label>
+                                <label><input type="checkbox" value="transit"><span>🚌 大眾運輸</span></label>
+                                <label><input type="checkbox" value="greenery"><span>🌳 綠化遮蔭</span></label>
+                                <label><input type="checkbox" value="accessibility"><span>♿ 無障礙</span></label>
+                                <label><input type="checkbox" value="safety"><span>🛡️ 道路安全</span></label>
+                                <label><input type="checkbox" value="local_activity"><span>☕ 店家活動</span></label>
+                            </div>
+                        </fieldset>
+
+                        <fieldset class="participation-fieldset">
+                            <legend>需要保留</legend>
+                            <div class="check-chip-grid" id="preserve-options">
+                                <label><input type="checkbox" value="existing_trees"><span>既有好樹</span></label>
+                                <label><input type="checkbox" value="parking"><span>部分停車</span></label>
+                                <label><input type="checkbox" value="loading"><span>裝卸短停</span></label>
+                                <label><input type="checkbox" value="transit"><span>公車營運</span></label>
+                            </div>
+                            <p class="fixed-preserve-note">建築、店面出入口、原始視角及救災通行會固定保留。</p>
+                        </fieldset>
+
+                        <div class="mask-control">
+                            <label class="mask-toggle">
+                                <input type="checkbox" id="use-edit-mask">
+                                <span>我想在照片上畫出可改造範圍</span>
+                            </label>
+                            <div class="mask-tools hidden" id="mask-tools">
+                                <span>用手指或滑鼠塗綠希望改造的位置</span>
+                                <button type="button" id="clear-mask">清除重畫</button>
+                            </div>
+                            <small id="mask-provider-note">
+                                OpenAI 會直接使用透明遮罩；Gemini 會把它當作範圍提示。
+                            </small>
+                        </div>
                     </div>
                 </div>
 
@@ -125,6 +207,26 @@
                         <span style="font-size:12px;color:#6A665A">之後跟小綠共創的調整版本也會用這個畫質</span>
                     </div>
                 </div>
+
+                <section class="design-plan-panel hidden" id="design-plan-panel" aria-live="polite">
+                    <div class="design-plan-heading">
+                        <div>
+                            <span class="plan-kicker">AI × 使用者共同確認</span>
+                            <h3 id="design-plan-title">這次的設計計畫</h3>
+                        </div>
+                        <span class="evidence-count" id="evidence-count"></span>
+                    </div>
+                    <div class="plan-summary" id="plan-summary"></div>
+                    <div class="evidence-list" id="evidence-list"></div>
+                    <div class="assumption-list" id="assumption-list"></div>
+                    <details class="prompt-details">
+                        <summary>查看將送給圖片模型的完整 Prompt</summary>
+                        <pre id="generation-prompt-preview"></pre>
+                    </details>
+                    <button type="button" class="confirm-generate-btn" id="confirm-generate-btn">
+                        確認計畫，開始生成 <span>✨</span>
+                    </button>
+                </section>
             </div>
         </div>
 
@@ -186,6 +288,19 @@
                             <span>你的街道設計小夥伴</span>
                         </div>
                     </div>
+                    <section class="result-review" id="result-review">
+                        <div class="result-review-heading">
+                            <strong>設計依據與畫面檢查</strong>
+                            <span id="audit-score">待檢查</span>
+                        </div>
+                        <p id="audit-summary">生成後會在這裡檢查設計是否清楚、連續且可信。</p>
+                        <details>
+                            <summary>查看依據與檢查項目</summary>
+                            <div id="result-audit-checks" class="result-audit-checks"></div>
+                            <div id="result-evidence" class="result-evidence"></div>
+                            <p class="audit-disclaimer" id="audit-disclaimer"></p>
+                        </details>
+                    </section>
                     <div class="copilot-messages" id="copilot-messages"></div>
                     <div class="copilot-suggestions" id="copilot-suggestions"></div>
                     <form class="copilot-input" id="copilot-input-form">
