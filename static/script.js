@@ -1,3 +1,301 @@
+const UI_TEXT = {
+    'zh-TW': {
+        appTitle: 'AI Street Designer｜一起改造你的街道',
+        subtitle: '和小綠一起，把你家門口的街道變得更可愛 💕',
+        uploadTitle: '把街景照片丟過來',
+        uploadHint: '拖曳上傳，或點一下選圖 ✨',
+        maskCanvas: '在照片上畫出希望 AI 改造的範圍',
+        styleLabel: '選一個改造風格',
+        widenSidewalks: '加寬人行道',
+        transitPriority: '公車彎月台',
+        bikeLane: '自行車道',
+        greenStreet: '綠意盎然',
+        reduceTraffic: '減少汽機車',
+        providerLabel: '選擇圖像生成器 ✦',
+        providerAria: '圖像生成器',
+        unavailable: '尚未設定 API Key',
+        customWish: '或是自己許個願 💭',
+        promptPlaceholder: '例如：步行區、有咖啡店和露天座位...',
+        inspectPlan: '檢視設計計畫',
+        refreshPlan: '重新整理設計計畫',
+        buildingPlan: '正在整理設計依據…',
+        coDefine: '和小綠一起定義這條街 🤝',
+        streetContext: '街道情境',
+        contextAuto: '讓 AI 初步判讀',
+        contextMain: '主要街道',
+        contextResidential: '住宅生活街道',
+        contextSchool: '通學環境',
+        contextTransit: '大眾運輸廊道',
+        contextUrban: '市中心街道',
+        contextNeighbourhood: '鄰里街道',
+        targetSpeed: '希望傳達的目標速度',
+        unspecified: '不指定',
+        intensity: '改造幅度',
+        light: '輕量改善',
+        balanced: '平衡改造',
+        transformative: '大幅重分配',
+        priorities: '優先照顧誰／什麼',
+        walking: '🚶 步行',
+        cycling: '🚲 自行車',
+        transit: '🚌 大眾運輸',
+        greenery: '🌳 綠化遮蔭',
+        accessibility: '♿ 無障礙',
+        safety: '🛡️ 道路安全',
+        localActivity: '☕ 店家活動',
+        preserve: '需要保留',
+        existingTrees: '既有好樹',
+        parking: '部分停車',
+        loadingAccess: '裝卸短停',
+        transitOps: '公車營運',
+        fixedPreserve: '建築、店面出入口、原始視角及救災通行會固定保留。',
+        useMask: '我想在照片上畫出可改造範圍',
+        maskHelp: '用手指或滑鼠塗綠希望改造的位置',
+        clearMask: '清除重畫',
+        maskNote: 'OpenAI 會直接使用透明遮罩；Gemini 會把它當作範圍提示。',
+        quality: '畫質 🖼️',
+        resolution1K: '標準 1K（最快）',
+        resolution2K: '高畫質 2K（建議）',
+        resolution4K: '超高 4K（較慢、成本較高）',
+        qualityNote: '之後跟小綠共創的調整版本也會用這個畫質',
+        planKicker: 'AI × 使用者共同確認',
+        planTitle: '這次的設計計畫',
+        promptDetails: '查看將送給圖片模型的完整 Prompt',
+        confirmGenerate: '確認計畫，開始生成',
+        resultTitle: '✨ 你的新街道',
+        round: '共創回合 {version}',
+        close: '關閉',
+        loading: '小綠正在動筆中...',
+        resultAlt: '改造後的街道設計',
+        beforeAlt: '改造前的原始街道',
+        beforeLabel: 'Before · 改造前',
+        afterLabel: 'After · 改造後',
+        compareAria: '拖曳比較改造前後',
+        compareValue: '改造前 {before}%，改造後 {after}%',
+        videoTitle: '滿意這一版？製作街道漫遊影片',
+        videoSummary: '以第一人稱沿著新街道向前走',
+        copilotName: '小綠',
+        copilotSubtitle: '你的街道設計小夥伴',
+        reviewHeading: '設計依據與畫面檢查',
+        pendingAudit: '待檢查',
+        auditIntro: '生成後會在這裡檢查設計是否清楚、連續且可信。',
+        reviewDetails: '查看依據與檢查項目',
+        copilotPlaceholder: '跟小綠聊聊：再多一些樹、人行道更寬...',
+        send: '送出',
+        videoKicker: '走進你的設計',
+        videoSetupTitle: '走進你設計的街道',
+        videoSetupDescription: '鏡頭會像行人的視線，沿著人行道自然向前移動。',
+        walkingPace: '步行節奏',
+        gentle: '慢慢散步',
+        gentleSub: '悠閒看街景',
+        natural: '自然步行',
+        naturalSub: '最適合預覽',
+        brisk: '輕快前進',
+        briskSub: '更有動態感',
+        duration: '影片長度',
+        seconds: '{value} 秒',
+        format: '畫面比例',
+        landscape: '▰ 橫式',
+        portrait: '▯ 直式',
+        firstPerson: '第一人稱漫遊',
+        safetyNote: '畫面不會出現使用者本人，降低人臉造成的生成失敗。',
+        later: '稍後再說',
+        confirmVideo: '確認影片設定',
+        evidenceCount: '{count} 項依據',
+        targetSpeedSummary: '目標速度：{value}',
+        prioritySummary: '優先：{value}',
+        designRule: '設計規則',
+        methodReference: '方法參考',
+        originalWording: '查看來源原文',
+        originalLanguageNote: '以下保留來源語言，正式應用請核對原始文件。',
+        manualReview: '待人工確認',
+        planError: '設計計畫建立失敗：{message}',
+        generationError: '生成失敗：{message}',
+        uploadImageError: '請上傳圖片檔。',
+        noMask: '請先在照片上塗出希望 AI 改造的範圍。',
+        providerDrawing: '{provider} 正在依確認計畫描繪新街道...',
+        fallbackGreeting: '嗨，我是小綠 🌱 跟我說你想怎麼調整這條街吧！',
+        chatError: '糟糕，我這邊有點卡 🌱 {message}',
+        fromVersion: '從 v{version} 建立第一人稱漫遊',
+        videoReady: 'v{version} 漫遊影片設定完成',
+        evidenceSourceOriginal: '原文',
+        removeImage: '移除照片',
+        closeVideo: '關閉影片設定',
+        imageConversionFailed: '無法轉換這張圖片，請改用 JPEG、PNG 或 WebP。',
+        maskCreateError: '無法建立改造範圍遮罩。',
+        maskExportError: '無法輸出改造範圍遮罩。',
+        planUnavailable: '無法建立設計計畫。',
+        unknownServerError: '伺服器回傳未知錯誤。',
+        chatFailed: '對話暫時失敗，請再試一次。',
+        retryChat: '可以再試一次嗎？',
+        auditFallback: '尚未完成模型視覺稽核，請共同確認。',
+        generationInterrupted: '生成程序在完成前中斷（HTTP {status}）{diagnostic}。可能是服務重新啟動、記憶體不足或上游服務逾時；請等 30 秒再試一次，並先改用 1K 或 2K。',
+        invalidServerResponse: '伺服器回傳了無法辨識的內容（HTTP {status}）{diagnostic}。',
+        requestDiagnostic: '（診斷碼 {id}）',
+        fallbackSuggestionTrees: '再多一些樹',
+        fallbackSuggestionBench: '加長椅',
+        fallbackSuggestionMovement: '檢查動線',
+    },
+    en: {
+        appTitle: 'AI Street Designer | Co-design a Better Street',
+        subtitle: 'Co-design a safer, greener street with Greenie 🌱',
+        uploadTitle: 'Drop in a street photo',
+        uploadHint: 'Drag and drop, or click to choose an image ✨',
+        maskCanvas: 'Paint the area that AI may transform',
+        styleLabel: 'Choose a transformation',
+        widenSidewalks: 'Widen sidewalks',
+        transitPriority: 'Transit priority',
+        bikeLane: 'Protected bike lane',
+        greenStreet: 'Greener street',
+        reduceTraffic: 'Reduce motor traffic',
+        providerLabel: 'Choose an image model ✦',
+        providerAria: 'Image model',
+        unavailable: 'API key not configured',
+        customWish: 'Or describe your own idea 💭',
+        promptPlaceholder: 'For example: a walkable street with café seating...',
+        inspectPlan: 'Review design plan',
+        refreshPlan: 'Refresh design plan',
+        buildingPlan: 'Retrieving design guidance…',
+        coDefine: 'Define the street together 🤝',
+        streetContext: 'Street context',
+        contextAuto: 'Let AI make an initial reading',
+        contextMain: 'Main street',
+        contextResidential: 'Residential living street',
+        contextSchool: 'School-zone street',
+        contextTransit: 'Transit corridor',
+        contextUrban: 'Urban core street',
+        contextNeighbourhood: 'Neighbourhood street',
+        targetSpeed: 'Target-speed design intent',
+        unspecified: 'Not specified',
+        intensity: 'Transformation intensity',
+        light: 'Light touch',
+        balanced: 'Balanced',
+        transformative: 'Major reallocation',
+        priorities: 'Prioritise',
+        walking: '🚶 Walking',
+        cycling: '🚲 Cycling',
+        transit: '🚌 Public transport',
+        greenery: '🌳 Shade and greenery',
+        accessibility: '♿ Accessibility',
+        safety: '🛡️ Road safety',
+        localActivity: '☕ Shops and activity',
+        preserve: 'Preserve',
+        existingTrees: 'Healthy trees',
+        parking: 'Some parking',
+        loadingAccess: 'Loading access',
+        transitOps: 'Bus operations',
+        fixedPreserve: 'Buildings, storefront access, viewpoint, and emergency access are always preserved.',
+        useMask: 'Paint the area that may be transformed',
+        maskHelp: 'Use a mouse or finger to paint the editable area in green',
+        clearMask: 'Clear mask',
+        maskNote: 'OpenAI uses the alpha mask directly; Gemini treats it as an edit-area guide.',
+        quality: 'Image quality 🖼️',
+        resolution1K: 'Standard 1K (fastest)',
+        resolution2K: 'High quality 2K (recommended)',
+        resolution4K: 'Ultra 4K (slower and more costly)',
+        qualityNote: 'Later co-design refinements will use the same quality setting',
+        planKicker: 'AI × USER CONFIRMATION',
+        planTitle: 'Design plan',
+        promptDetails: 'View the exact image-model prompt',
+        confirmGenerate: 'Confirm plan and generate',
+        resultTitle: '✨ Your redesigned street',
+        round: 'Co-design round {version}',
+        close: 'Close',
+        loading: 'Greenie is sketching...',
+        resultAlt: 'Redesigned street',
+        beforeAlt: 'Original street',
+        beforeLabel: 'Before',
+        afterLabel: 'After',
+        compareAria: 'Drag to compare before and after',
+        compareValue: 'Before {before}%, after {after}%',
+        videoTitle: 'Happy with this version? Create a street walk-through',
+        videoSummary: 'Move forward along the redesigned street in first person',
+        copilotName: 'Greenie',
+        copilotSubtitle: 'Your street-design co-pilot',
+        reviewHeading: 'Design evidence and visual review',
+        pendingAudit: 'Pending',
+        auditIntro: 'After generation, this panel checks whether the concept is clear, continuous, and credible.',
+        reviewDetails: 'View evidence and review checks',
+        copilotPlaceholder: 'Ask Greenie: add more trees, widen the sidewalk...',
+        send: 'Send',
+        videoKicker: 'WALK THROUGH YOUR DESIGN',
+        videoSetupTitle: 'Walk through your redesigned street',
+        videoSetupDescription: 'The camera moves naturally forward from a pedestrian viewpoint.',
+        walkingPace: 'Walking pace',
+        gentle: 'Gentle stroll',
+        gentleSub: 'Take in the details',
+        natural: 'Natural walk',
+        naturalSub: 'Best for previewing',
+        brisk: 'Brisk walk',
+        briskSub: 'More dynamic',
+        duration: 'Duration',
+        seconds: '{value} sec',
+        format: 'Format',
+        landscape: '▰ Landscape',
+        portrait: '▯ Portrait',
+        firstPerson: 'First-person walk-through',
+        safetyNote: 'The user does not appear on screen, reducing face-related generation failures.',
+        later: 'Maybe later',
+        confirmVideo: 'Confirm video settings',
+        evidenceCount: '{count} sources',
+        targetSpeedSummary: 'Target speed: {value}',
+        prioritySummary: 'Priorities: {value}',
+        designRule: 'Design rule',
+        methodReference: 'Method',
+        originalWording: 'View original source wording',
+        originalLanguageNote: 'The original-language wording is preserved below. Verify the source document before project use.',
+        manualReview: 'Needs review',
+        planError: 'Could not create the design plan: {message}',
+        generationError: 'Generation failed: {message}',
+        uploadImageError: 'Please upload an image file.',
+        noMask: 'Paint the area that AI may transform first.',
+        providerDrawing: '{provider} is drawing the confirmed street design...',
+        fallbackGreeting: 'Hi, I’m Greenie 🌱 Tell me what you would like to adjust next.',
+        chatError: 'I got a little stuck 🌱 {message}',
+        fromVersion: 'Create a first-person walk-through from v{version}',
+        videoReady: 'Walk-through settings ready for v{version}',
+        evidenceSourceOriginal: 'Original',
+        removeImage: 'Remove photo',
+        closeVideo: 'Close video settings',
+        imageConversionFailed: 'This image could not be converted. Please use JPEG, PNG, or WebP.',
+        maskCreateError: 'The editable-area mask could not be created.',
+        maskExportError: 'The editable-area mask could not be exported.',
+        planUnavailable: 'The design plan could not be created.',
+        unknownServerError: 'The server returned an unknown error.',
+        chatFailed: 'Chat is temporarily unavailable. Please try again.',
+        retryChat: 'Would you try that again?',
+        auditFallback: 'The model-based visual review is not complete. Please review it together.',
+        generationInterrupted: 'Generation stopped before completion (HTTP {status}){diagnostic}. The service may have restarted, run out of memory, or timed out; wait 30 seconds, then retry at 1K or 2K.',
+        invalidServerResponse: 'The server returned an unreadable response (HTTP {status}){diagnostic}.',
+        requestDiagnostic: ' (request ID {id})',
+        fallbackSuggestionTrees: 'Add more trees',
+        fallbackSuggestionBench: 'Add benches',
+        fallbackSuggestionMovement: 'Review movement paths',
+    },
+};
+
+function normalizeUiLanguage(value) {
+    return String(value || '').toLowerCase().startsWith('en') ? 'en' : 'zh-TW';
+}
+
+const storedUiLanguage = localStorage.getItem('street-designer-language');
+let currentLanguage = normalizeUiLanguage(
+    storedUiLanguage
+    || ((navigator.language || '').startsWith('en') ? 'en' : 'zh-TW')
+);
+
+function tr(key, replacements = {}) {
+    const dictionary = UI_TEXT[currentLanguage] || UI_TEXT['zh-TW'];
+    let value = dictionary[key] || UI_TEXT['zh-TW'][key] || key;
+    Object.entries(replacements).forEach(([name, replacement]) => {
+        value = value.replaceAll(`{${name}}`, String(replacement));
+    });
+    return value;
+}
+
+function languageHeaders(headers = {}) {
+    return { ...headers, 'X-UI-Language': currentLanguage };
+}
+
 // Resize and re-encode large images to keep Render requests and model inputs small.
 async function compressImage(file, maxDimension = 1920, quality = 0.85) {
     const supportedTypes = ['image/jpeg', 'image/png', 'image/webp'];
@@ -32,7 +330,7 @@ async function compressImage(file, maxDimension = 1920, quality = 0.85) {
     return await new Promise((resolve, reject) => {
         canvas.toBlob((blob) => {
             if (!blob) {
-                reject(new Error('無法轉換這張圖片，請改用 JPEG、PNG 或 WebP。'));
+                reject(new Error(tr('imageConversionFailed')));
                 return;
             }
             const baseName = file.name.replace(/\.[^.]+$/, '');
@@ -47,17 +345,21 @@ async function readApiJson(response) {
         return JSON.parse(rawText);
     } catch (parseError) {
         const requestId = response.headers.get('X-Request-ID');
-        const diagnostic = requestId ? `（診斷碼 ${requestId}）` : '';
+        const diagnostic = requestId
+            ? tr('requestDiagnostic', { id: requestId })
+            : '';
         if (response.status >= 500) {
             throw new Error(
-                `生成程序在完成前中斷（HTTP ${response.status}）${diagnostic}。`
-                + '可能是 Render worker 重啟、記憶體不足或上游服務逾時；'
-                + '請等 30 秒再試一次，並先改用 1K 或 2K。'
+                tr('generationInterrupted', {
+                    status: response.status,
+                    diagnostic,
+                })
             );
         }
-        throw new Error(
-            `伺服器回傳了無法辨識的內容（HTTP ${response.status}）${diagnostic}。`
-        );
+        throw new Error(tr('invalidServerResponse', {
+            status: response.status,
+            diagnostic,
+        }));
     }
 }
 
@@ -72,6 +374,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const optionCards = document.querySelectorAll('.option-card');
     const customPromptInput = document.getElementById('custom-prompt');
     const generateBtn = document.getElementById('generate-btn');
+    const languageButtons = document.querySelectorAll(
+        '.language-switch button[data-language]'
+    );
     const providerInputs = document.querySelectorAll('input[name="image-provider"]');
     const streetContext = document.getElementById('street-context');
     const targetSpeed = document.getElementById('target-speed');
@@ -139,22 +444,79 @@ document.addEventListener('DOMContentLoaded', () => {
     let generationBusy = false;
     let originalImageUrl = null;
     let activeDesignPlan = null;
+    let currentDesignSpec = null;
+    let currentAudit = null;
     let maskStrokes = [];
     let activeMaskStroke = null;
     const videoDrafts = new Map();
     let videoReturnFocus = null;
 
-    const videoOptionLabels = {
-        speed: {
-            gentle: '慢慢散步',
-            natural: '自然步行',
-            brisk: '輕快前進',
-        },
-        format: {
-            landscape: '橫式',
-            portrait: '直式',
-        },
-    };
+    function applyLanguage() {
+        document.documentElement.lang = currentLanguage === 'en'
+            ? 'en'
+            : 'zh-Hant';
+        document.title = tr('appTitle');
+
+        document.querySelectorAll('[data-i18n]').forEach(element => {
+            const replacements = element.dataset.i18nValue
+                ? { value: element.dataset.i18nValue }
+                : {};
+            element.textContent = tr(element.dataset.i18n, replacements);
+        });
+        [
+            ['data-i18n-placeholder', 'placeholder'],
+            ['data-i18n-aria-label', 'aria-label'],
+            ['data-i18n-alt', 'alt'],
+        ].forEach(([dataAttribute, targetAttribute]) => {
+            document.querySelectorAll(`[${dataAttribute}]`).forEach(element => {
+                element.setAttribute(
+                    targetAttribute,
+                    tr(element.getAttribute(dataAttribute))
+                );
+            });
+        });
+
+        languageButtons.forEach(button => {
+            button.setAttribute(
+                'aria-pressed',
+                String(button.dataset.language === currentLanguage)
+            );
+        });
+        document.querySelectorAll('.provider-option').forEach(option => {
+            const model = option.dataset.model || '';
+            const unavailable = option.dataset.available === 'false'
+                ? ` · ${tr('unavailable')}`
+                : '';
+            const detail = option.querySelector('small');
+            if (detail) detail.textContent = `${model}${unavailable}`;
+        });
+
+        generateBtn.innerHTML = activeDesignPlan
+            ? `${tr('refreshPlan')} <span>↻</span>`
+            : `${tr('inspectPlan')} <span>🔎</span>`;
+        if (versions[currentVersion]) {
+            roundBadge.textContent = tr('round', {
+                version: versions[currentVersion].version,
+            });
+        }
+        setComparisonPosition(comparisonRange.value);
+        updateVideoLauncher();
+        if (activeDesignPlan) renderDesignPlan(activeDesignPlan, false);
+        if (currentDesignSpec || currentAudit) {
+            renderResultReview(currentDesignSpec, currentAudit);
+        }
+    }
+
+    languageButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            const nextLanguage = normalizeUiLanguage(button.dataset.language);
+            if (nextLanguage === currentLanguage) return;
+            currentLanguage = nextLanguage;
+            localStorage.setItem('street-designer-language', currentLanguage);
+            invalidateDesignPlan();
+            applyLanguage();
+        });
+    });
 
     function setComparisonPosition(value) {
         const position = Math.min(100, Math.max(0, Number(value)));
@@ -162,7 +524,10 @@ document.addEventListener('DOMContentLoaded', () => {
         comparisonRange.value = String(position);
         comparisonRange.setAttribute(
             'aria-valuetext',
-            `改造前 ${position}%，改造後 ${100 - position}%`
+            tr('compareValue', {
+                before: position,
+                after: 100 - position,
+            })
         );
         beforeLabel.style.opacity = position < 12 ? '0' : '1';
         afterLabel.style.opacity = position > 88 ? '0' : '1';
@@ -315,7 +680,7 @@ document.addEventListener('DOMContentLoaded', () => {
             };
             image.onerror = () => {
                 URL.revokeObjectURL(url);
-                reject(new Error('無法建立改造範圍遮罩。'));
+                reject(new Error(tr('maskCreateError')));
             };
             image.src = url;
         });
@@ -324,7 +689,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function buildMaskBlob(uploadFile) {
         if (!useEditMask.checked) return null;
         if (!maskStrokes.length) {
-            throw new Error('請先在照片上塗出希望 AI 改造的範圍。');
+            throw new Error(tr('noMask'));
         }
         const dimensions = await imageDimensions(uploadFile);
         const canvas = document.createElement('canvas');
@@ -341,7 +706,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return new Promise((resolve, reject) => {
             canvas.toBlob(blob => {
                 if (blob) resolve(blob);
-                else reject(new Error('無法輸出改造範圍遮罩。'));
+                else reject(new Error(tr('maskExportError')));
             }, 'image/png');
         });
     }
@@ -373,7 +738,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function handleFile(file) {
         if (!file.type.startsWith('image/')) {
-            alert('Please upload an image file.');
+            alert(tr('uploadImageError'));
             return;
         }
         selectedFile = file;
@@ -486,7 +851,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function invalidateDesignPlan() {
         activeDesignPlan = null;
         designPlanPanel.classList.add('hidden');
-        generateBtn.innerHTML = '檢視設計計畫 <span>🔎</span>';
+        generateBtn.innerHTML = `${tr('inspectPlan')} <span>🔎</span>`;
     }
 
     function updateGenerateState() {
@@ -506,49 +871,56 @@ document.addEventListener('DOMContentLoaded', () => {
 
         generationBusy = true;
         updateGenerateState();
-        generateBtn.textContent = '正在整理設計依據…';
+        generateBtn.textContent = tr('buildingPlan');
 
         try {
             const response = await fetch('/api/design-plan', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: languageHeaders({
+                    'Content-Type': 'application/json',
+                }),
                 body: JSON.stringify({
                     custom_prompt: prompt,
                     preset_id: selectedPresetId,
                     design_preferences: collectDesignPreferences(),
+                    language: currentLanguage,
                 }),
             });
             const data = await readApiJson(response);
             if (!response.ok || data.status !== 'success') {
-                throw new Error(data.error || '無法建立設計計畫。');
+                throw new Error(data.error || tr('planUnavailable'));
             }
             activeDesignPlan = data;
             renderDesignPlan(data);
         } catch (error) {
             console.error('Design plan error:', error);
-            alert('設計計畫建立失敗：' + error.message);
+            alert(tr('planError', { message: error.message }));
         } finally {
             generationBusy = false;
             generateBtn.innerHTML = activeDesignPlan
-                ? '重新整理設計計畫 <span>↻</span>'
-                : '檢視設計計畫 <span>🔎</span>';
+                ? `${tr('refreshPlan')} <span>↻</span>`
+                : `${tr('inspectPlan')} <span>🔎</span>`;
             updateGenerateState();
         }
     });
 
-    function renderDesignPlan(data) {
+    function renderDesignPlan(data, scrollIntoView = true) {
         const spec = data.design_spec;
         designPlanTitle.textContent = spec.design_label;
-        evidenceCount.textContent = `${spec.evidence.length} 項依據`;
-        const priorityText = spec.priorities.map(item => item.label).join('、');
+        evidenceCount.textContent = tr('evidenceCount', {
+            count: spec.evidence.length,
+        });
+        const priorityText = spec.priorities
+            .map(item => item.label)
+            .join(currentLanguage === 'en' ? ', ' : '、');
         const speedText = spec.target_speed_kmh
             ? `${spec.target_speed_kmh} km/h`
-            : '未指定';
+            : tr('unspecified');
         planSummary.textContent = [
             spec.street_context_label,
             spec.intervention_intensity_label,
-            `目標速度：${speedText}`,
-            `優先：${priorityText}`,
+            tr('targetSpeedSummary', { value: speedText }),
+            tr('prioritySummary', { value: priorityText }),
         ].join(' · ');
 
         evidenceList.innerHTML = '';
@@ -557,12 +929,16 @@ document.addEventListener('DOMContentLoaded', () => {
             row.className = 'evidence-item';
             const kind = document.createElement('span');
             kind.className = 'evidence-kind';
-            kind.textContent = item.kind === 'rule' ? '設計規則' : '方法參考';
+            kind.textContent = item.kind === 'rule'
+                ? tr('designRule')
+                : tr('methodReference');
             const copy = document.createElement('div');
             const title = document.createElement('strong');
             title.textContent = item.title;
             copy.appendChild(title);
-            copy.appendChild(document.createTextNode(`：${item.statement} `));
+            copy.appendChild(document.createTextNode(
+                `${currentLanguage === 'en' ? ': ' : '：'}${item.statement} `
+            ));
             const sourceText = [
                 item.manual_title,
                 item.section ? `§${item.section}` : '',
@@ -579,6 +955,27 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 copy.appendChild(document.createTextNode(sourceText));
             }
+            if (
+                currentLanguage === 'en'
+                && item.original_statement
+                && item.original_statement !== item.statement
+            ) {
+                const original = document.createElement('details');
+                original.className = 'evidence-original';
+                const summary = document.createElement('summary');
+                summary.textContent = tr('originalWording');
+                const note = document.createElement('small');
+                note.textContent = tr('originalLanguageNote');
+                const originalCopy = document.createElement('p');
+                const originalTitle = document.createElement('strong');
+                originalTitle.textContent = item.original_title || item.title;
+                originalCopy.appendChild(originalTitle);
+                originalCopy.appendChild(document.createTextNode(
+                    `：${item.original_statement}`
+                ));
+                original.append(summary, note, originalCopy);
+                copy.appendChild(original);
+            }
             row.append(kind, copy);
             evidenceList.appendChild(row);
         });
@@ -591,7 +988,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         promptPreview.textContent = data.generation_prompt;
         designPlanPanel.classList.remove('hidden');
-        designPlanPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        if (scrollIntoView) {
+            designPlanPanel.scrollIntoView({
+                behavior: 'smooth',
+                block: 'nearest',
+            });
+        }
     }
 
     // ===== First-time generation after plan confirmation =====
@@ -609,7 +1011,7 @@ document.addEventListener('DOMContentLoaded', () => {
         openResultPanel();
         setComparisonPosition(50);
         const providerName = providerInput.value === 'openai' ? 'OpenAI' : 'Gemini';
-        setLoading(true, `${providerName} 正在依確認計畫描繪新街道...`);
+        setLoading(true, tr('providerDrawing', { provider: providerName }));
 
         try {
             const uploadFile = await compressImage(selectedFile);
@@ -629,9 +1031,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const resSel = document.getElementById('resolution-select');
             formData.append('resolution', resSel ? resSel.value : '2K');
             formData.append('provider', providerInput.value);
+            formData.append('ui_language', currentLanguage);
 
             const response = await fetch('/api/transform', {
                 method: 'POST',
+                headers: languageHeaders(),
                 body: formData,
             });
             const data = await readApiJson(response);
@@ -639,7 +1043,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(data.error || `HTTP ${response.status}`);
             }
             if (data.status !== 'success' || !data.image_url) {
-                throw new Error(data.error || 'Unknown error from server');
+                throw new Error(data.error || tr('unknownServerError'));
             }
 
             sessionId = data.session_id;
@@ -653,15 +1057,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 addChatMessage('assistant', data.copilot.message);
                 renderSuggestions(data.copilot.suggestions || []);
             } else {
-                addChatMessage('assistant', '嗨，我是小綠 🌱 跟我說你想怎麼調整這條街吧！');
-                renderSuggestions(['再多一些樹', '加長椅', '檢查動線']);
+                addChatMessage('assistant', tr('fallbackGreeting'));
+                renderSuggestions([
+                    tr('fallbackSuggestionTrees'),
+                    tr('fallbackSuggestionBench'),
+                    tr('fallbackSuggestionMovement'),
+                ]);
             }
             setLoading(false);
             copilotInput.focus();
         } catch (error) {
             console.error('Generation error:', error);
             setLoading(false);
-            alert('生成失敗：' + error.message);
+            alert(tr('generationError', { message: error.message }));
             resultSection.classList.add('hidden');
         } finally {
             generationBusy = false;
@@ -674,11 +1082,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderResultReview(spec, audit) {
         const safeSpec = spec || { evidence: [] };
         const safeAudit = audit || { checks: [] };
+        currentDesignSpec = safeSpec;
+        currentAudit = safeAudit;
         auditScore.textContent = safeAudit.score == null
-            ? '待人工確認'
+            ? tr('manualReview')
             : `${safeAudit.score} / 100`;
         auditSummary.textContent = safeAudit.summary
-            || '尚未完成模型視覺稽核，請共同確認。';
+            || tr('auditFallback');
         auditDisclaimer.textContent = safeAudit.disclaimer || '';
 
         resultAuditChecks.innerHTML = '';
@@ -692,7 +1102,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 : check.status === 'fail' ? '!' : '?';
             const copy = document.createElement('div');
             copy.textContent = check.note
-                ? `${check.label}：${check.note}`
+                ? `${check.label}${currentLanguage === 'en' ? ': ' : '：'}${check.note}`
                 : check.label;
             row.append(status, copy);
             resultAuditChecks.appendChild(row);
@@ -788,23 +1198,27 @@ document.addEventListener('DOMContentLoaded', () => {
         const activeVersion = versions[currentVersion];
         videoLauncher.disabled = generationBusy || !activeVersion;
         if (!activeVersion) {
-            videoLauncherTitle.textContent = '滿意這一版？製作街道漫遊影片';
-            videoLauncherSummary.textContent = '以第一人稱沿著新街道向前走';
+            videoLauncherTitle.textContent = tr('videoTitle');
+            videoLauncherSummary.textContent = tr('videoSummary');
             return;
         }
 
         const draft = videoDrafts.get(activeVersion.version);
         if (!draft) {
-            videoLauncherTitle.textContent = '滿意這一版？製作街道漫遊影片';
-            videoLauncherSummary.textContent = `從 v${activeVersion.version} 建立第一人稱漫遊`;
+            videoLauncherTitle.textContent = tr('videoTitle');
+            videoLauncherSummary.textContent = tr('fromVersion', {
+                version: activeVersion.version,
+            });
             return;
         }
 
-        videoLauncherTitle.textContent = `v${activeVersion.version} 漫遊影片設定完成`;
+        videoLauncherTitle.textContent = tr('videoReady', {
+            version: activeVersion.version,
+        });
         videoLauncherSummary.textContent = [
-            videoOptionLabels.speed[draft.speed],
-            `${draft.duration} 秒`,
-            videoOptionLabels.format[draft.format],
+            tr(draft.speed),
+            tr('seconds', { value: draft.duration }),
+            tr(draft.format),
         ].join(' · ');
     }
 
@@ -828,14 +1242,20 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch('/api/chat', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_id: sessionId, message }),
+                headers: languageHeaders({
+                    'Content-Type': 'application/json',
+                }),
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    message,
+                    language: currentLanguage,
+                }),
             });
             const data = await readApiJson(response);
             removeTypingIndicator();
 
             if (!response.ok || data.status !== 'success') {
-                throw new Error(data.error || 'Chat failed');
+                throw new Error(data.error || tr('chatFailed'));
             }
 
             if (data.intent === 'refine' && data.image_url) {
@@ -852,7 +1272,9 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Chat error:', error);
             addChatMessage(
                 'assistant',
-                `糟糕，我這邊有點卡 🌱 ${error.message || '可以再試一次嗎？'}`
+                tr('chatError', {
+                    message: error.message || tr('retryChat'),
+                })
             );
         } finally {
             chatBusy = false;
@@ -926,7 +1348,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentVersion = idx;
         const v = versions[idx];
         resultImage.src = v.image_url;
-        roundBadge.textContent = `共創回合 ${v.version}`;
+        roundBadge.textContent = tr('round', { version: v.version });
         renderVersionStrip();
         updateVideoLauncher();
     }
@@ -951,4 +1373,6 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('beforeunload', () => {
         if (originalImageUrl) URL.revokeObjectURL(originalImageUrl);
     });
+
+    applyLanguage();
 });

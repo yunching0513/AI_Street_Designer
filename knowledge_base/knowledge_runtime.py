@@ -285,6 +285,256 @@ LEGAL_FORCE_LABELS = {
     "comparative": "國際比較參考",
 }
 
+EN_CONTEXT_LABELS = {
+    "auto": "AI-assisted initial reading",
+    "urban_core": "Urban core street",
+    "main_street": "Main street",
+    "residential": "Residential living street",
+    "school": "School-zone street",
+    "transit_corridor": "Transit corridor",
+    "neighbourhood": "Neighbourhood street",
+}
+EN_INTENSITY_LABELS = {
+    "light": "Light-touch improvement",
+    "balanced": "Balanced transformation",
+    "transformative": "Major space reallocation",
+}
+EN_PRESERVE_LABELS = {
+    "buildings": "existing buildings, storefronts, and entrances",
+    "camera": "original viewpoint and composition",
+    "emergency_access": "emergency and essential access",
+    "existing_trees": "healthy existing trees",
+    "parking": "some curbside parking",
+    "loading": "loading and short-stay access",
+    "transit": "bus operations and stops",
+}
+EN_PRIORITY_LABELS = {
+    "walking": "walking continuity",
+    "cycling": "cycling safety",
+    "transit": "public transport",
+    "greenery": "shade and greenery",
+    "accessibility": "accessibility",
+    "safety": "road safety",
+    "local_activity": "shops and street activity",
+}
+EN_LEGAL_FORCE_LABELS = {
+    "mandatory": "Current mandatory Taiwan requirement",
+    "recommended": "Recommended value or guidance",
+    "advisory": "Advisory design principle",
+    "comparative": "International comparative reference",
+}
+EN_PROFILE_COPY = {
+    "widen-sidewalks": {
+        "label": "Continuous widened sidewalk",
+        "visual_requirements": [
+            "Create a continuous, legible, step-free clear walking zone.",
+            "Align curb ramps and tactile cues with pedestrian desire lines.",
+            "Reallocate carriageway or curb space without altering buildings.",
+        ],
+        "negative_constraints": [
+            "Do not allow the sidewalk to end abruptly or be blocked by scooters, planting, or furniture.",
+            "Do not create steps, excessively steep ramps, or disconnected curbs.",
+        ],
+        "spatial_order": [
+            "Buildings and storefronts",
+            "Clear walking zone",
+            "Furniture and planting zone",
+            "Curb",
+            "Carriageway",
+        ],
+    },
+    "transit-priority": {
+        "label": "Accessible transit stop and priority",
+        "visual_requirements": [
+            "Connect waiting and boarding areas directly to a continuous pedestrian route.",
+            "Make transit-priority space legible through coherent paving or markings.",
+            "Retain room for waiting passengers, wheelchair turning, and through movement.",
+        ],
+        "negative_constraints": [
+            "Do not let shelters or stop furniture block the primary walking zone.",
+            "Do not force passengers to board directly from mixed traffic.",
+        ],
+        "spatial_order": [
+            "Buildings and storefronts",
+            "Clear walking zone",
+            "Waiting facilities",
+            "Accessible boarding area",
+            "Transit-priority space",
+            "General traffic lane",
+        ],
+    },
+    "protected-bike-lane": {
+        "label": "Protected bicycle lane",
+        "visual_requirements": [
+            "Keep the cycling route continuous, legible, and protected or buffered from faster traffic.",
+            "Keep door zones, curbs, and fixed objects outside the effective riding space.",
+            "Maintain clear cycle crossings and driver sight lines at intersections.",
+        ],
+        "negative_constraints": [
+            "Do not let the bicycle lane disappear at intersections or transit stops.",
+            "Do not place separators inside the effective riding width.",
+            "Do not place cars or scooters in the bicycle lane.",
+        ],
+        "spatial_order": [
+            "Buildings and storefronts",
+            "Sidewalk",
+            "Furniture zone",
+            "Protected bicycle lane",
+            "Buffer or separator",
+            "Carriageway",
+        ],
+    },
+    "green-street": {
+        "label": "Green living street",
+        "visual_requirements": [
+            "Concentrate trees, rain gardens, and seating in a maintainable furniture zone with continuous shade.",
+            "Keep a clear continuous walking zone and visible storefronts.",
+            "Show credible planting scale, tree pits, drainage, and maintenance access.",
+        ],
+        "negative_constraints": [
+            "Do not substitute scattered decorative pots for maintainable green infrastructure.",
+            "Do not let planting, tree pits, or seating block the accessible route.",
+        ],
+        "spatial_order": [
+            "Buildings and storefronts",
+            "Clear walking zone",
+            "Trees, drainage, and furniture zone",
+            "Curb",
+            "Carriageway",
+        ],
+    },
+    "reduce-motor-traffic": {
+        "label": "Reduced private motor-vehicle dominance",
+        "visual_requirements": [
+            "Reduce visible private vehicle occupation and reallocate space to walking, cycling, and staying.",
+            "Use entry treatments, paving, and street layout to communicate low speed and pedestrian priority.",
+            "Retain a credible path for emergency, loading, and essential access.",
+        ],
+        "negative_constraints": [
+            "Do not retain the same vehicle-dominated cross-section as the source image.",
+            "Do not completely block emergency or essential access.",
+            "Do not create an out-of-scale plaza or an implausibly empty highway.",
+        ],
+        "spatial_order": [
+            "Buildings and storefronts",
+            "Pedestrian activity and walking space",
+            "Greenery and furniture",
+            "Low-speed essential access lane",
+        ],
+    },
+    "generic": {
+        "label": "Custom people-first street transformation",
+        "visual_requirements": [
+            "Respond with a safe, continuous, maintainable people-first street design.",
+            "Protect accessible routes, essential access, and existing building entrances.",
+            "Make new elements credible in cross-section position, scale, and material.",
+        ],
+        "negative_constraints": [
+            "Do not use decorative objects as a substitute for real space reallocation.",
+            "Do not block storefronts, entrances, emergency access, or critical sight lines.",
+        ],
+        "spatial_order": [
+            "Buildings and storefronts",
+            "Clear walking zone",
+            "Furniture or buffer zone",
+            "Movement space",
+        ],
+    },
+}
+EN_ELEMENT_LABELS = {
+    "bicycle_lane": "Bicycle lane",
+    "protected_cycle_track": "Protected cycle track",
+    "shared_use_path": "Shared-use path",
+    "independent_bicycle_path": "Independent bicycle path",
+    "buffer_zone": "Buffer zone",
+    "curb_ramp": "Curb ramp",
+    "bollard": "Bollard",
+    "traffic_calming_zone": "Traffic-calming zone",
+    "motor_vehicle_lane": "Motor-vehicle lane",
+    "bus_lane": "Bus lane",
+    "shared_street": "Shared street",
+    "parking_bay": "Parking bay",
+    "street_cross_section": "Street cross-section",
+    "sidewalk": "Sidewalk",
+}
+EN_PARAMETER_LABELS = {
+    "clear_width": "clear width",
+    "rideable_width": "rideable width",
+    "design_device_width": "design-user envelope",
+    "running_slope": "running slope",
+    "facility_selection": "facility selection",
+    "additional_width": "additional width",
+    "side_clearance": "side clearance",
+    "aaa_facility_selection": "all-ages-and-abilities facility selection",
+    "shy_distance": "shy distance",
+    "surface_quality": "surface quality",
+    "design_speed": "design speed",
+    "cross_slope": "cross slope",
+    "superelevation": "superelevation",
+    "longitudinal_grade": "longitudinal grade",
+    "lane_width": "lane width",
+    "riding_sight_distance": "riding sight distance",
+    "surface_contrast": "surface contrast",
+    "clear_height": "clear height",
+    "top_clear_width": "top landing clear width",
+    "top_cross_slope": "top landing cross slope",
+    "clear_gap": "clear gap",
+    "height": "height",
+    "shape_safety": "safe form",
+    "visual_contrast": "visual contrast",
+    "maximum_speed": "maximum speed",
+    "design_scope": "design scope",
+    "entry_treatment": "entry treatment",
+    "emergency_access": "emergency access",
+    "minimum_width_use": "use of minimum width",
+    "effective_width": "effective width",
+    "combined_width": "combined width",
+    "wheelchair_clear_width": "wheelchair clear width",
+    "balance_room_each_side": "lateral balance allowance",
+    "combined_active_travel_width": "combined active-travel width",
+    "carriageway_width": "carriageway width",
+    "wide_cycle_access": "wide-cycle access",
+    "maintenance_clear_width": "maintenance clear width",
+    "inner_turn_radius": "inner turn radius",
+    "turn_envelope": "turning envelope",
+}
+EN_PRINCIPLE_SUMMARIES = {
+    "surface_quality": "Provide a firm, even, and slip-resistant riding surface.",
+    "surface_contrast": "Use material or colour contrast to make the facility legible.",
+    "facility_selection": "Select the facility type from context, speed, volume, and user needs.",
+    "aaa_facility_selection": "Use an all-ages-and-abilities facility appropriate to the operating context.",
+    "shape_safety": "Use forms and edges that reduce collision and snagging risk.",
+    "visual_contrast": "Maintain sufficient visual contrast for detection and wayfinding.",
+    "design_scope": "Treat the full street cross-section and its user interactions as one system.",
+    "entry_treatment": "Make the transition into the low-speed area visually and physically legible.",
+    "emergency_access": "Retain a credible emergency-access path while calming traffic.",
+    "minimum_width_use": "Treat a minimum width as a constrained exception, not the default design target.",
+}
+EN_TOPIC_LABELS = {
+    "accessibility": "accessibility",
+    "cycling": "cycling",
+    "maintenance": "maintenance",
+    "engagement": "community engagement",
+    "road_safety": "road safety",
+    "materials": "materials",
+    "cross_section": "cross-section design",
+    "school_streets": "school streets",
+    "geometric_design": "geometric design",
+    "pedestrian": "walking",
+    "trees_public_realm": "trees and public realm",
+    "drainage": "drainage",
+    "green_infrastructure": "green infrastructure",
+    "tactical_urbanism": "tactical urbanism",
+    "parking_curb": "curb management",
+    "transit": "public transport",
+    "intersections": "intersections",
+}
+
+
+def normalize_language(language) -> str:
+    value = str(language or "").strip().lower()
+    return "en" if value.startswith("en") else "zh-TW"
+
 
 def _bundle_dir() -> Path:
     override = os.getenv("STREET_SKILL_DIR", "").strip()
@@ -489,15 +739,25 @@ def _card_score(card, profile, context, request_tokens):
     return score
 
 
-def _value_label(rule) -> str:
+def _value_label(rule, language="zh-TW") -> str:
     value = rule.get("value") or {}
     unit = value.get("unit") or ""
-    for key, label in (
-        ("minimum", "最低"),
-        ("preferred", "建議"),
-        ("maximum", "上限"),
-        ("exact", "指定"),
-    ):
+    labels = (
+        (
+            ("minimum", "Minimum"),
+            ("preferred", "Preferred"),
+            ("maximum", "Maximum"),
+            ("exact", "Specified"),
+        )
+        if normalize_language(language) == "en"
+        else (
+            ("minimum", "最低"),
+            ("preferred", "建議"),
+            ("maximum", "上限"),
+            ("exact", "指定"),
+        )
+    )
+    for key, label in labels:
         candidate = value.get(key)
         if candidate is not None and candidate is not False:
             if key == "exact" and candidate is True:
@@ -508,30 +768,72 @@ def _value_label(rule) -> str:
     return ""
 
 
-def _public_rule(rule, manuals):
+def _public_rule(rule, manuals, language="zh-TW"):
+    language = normalize_language(language)
     manual = manuals.get(rule.get("manual_id"), {})
     source = rule.get("source") or {}
     authority = manual.get("authority", "")
     legal_force = rule.get("legal_force", "advisory")
     if not rule.get("manual_id", "").startswith("tw-"):
         legal_force = "comparative"
+    original_title = rule.get("title")
+    original_statement = rule.get("statement")
+    value_label = _value_label(rule, language)
+    if language == "en":
+        element_label = EN_ELEMENT_LABELS.get(
+            rule.get("element"),
+            str(rule.get("element") or "Street design").replace("_", " ").title(),
+        )
+        parameter_label = EN_PARAMETER_LABELS.get(
+            rule.get("parameter"),
+            str(rule.get("parameter") or "design criterion").replace("_", " "),
+        )
+        title = f"{element_label} — {parameter_label}"
+        if value_label:
+            statement = f"Design criterion: {value_label}."
+        else:
+            statement = EN_PRINCIPLE_SUMMARIES.get(
+                rule.get("parameter"),
+                (
+                    f"Apply the cited source guidance for {parameter_label}; "
+                    "verify the exact clause during detailed design."
+                ),
+            )
+        authority_labels = EN_LEGAL_FORCE_LABELS
+        fallback_authority = "Design reference"
+        manual_title = (
+            manual.get("title")
+            or manual.get("local_title")
+            or rule.get("manual_id")
+        )
+    else:
+        title = original_title
+        statement = original_statement
+        authority_labels = LEGAL_FORCE_LABELS
+        fallback_authority = "設計參考"
+        manual_title = (
+            manual.get("local_title")
+            or manual.get("title")
+            or rule.get("manual_id")
+        )
     return {
         "kind": "rule",
         "id": rule.get("rule_id"),
-        "title": rule.get("title"),
-        "statement": rule.get("statement"),
-        "value_label": _value_label(rule),
+        "title": title,
+        "statement": statement,
+        "original_title": original_title,
+        "original_statement": original_statement,
+        "source_language": rule.get("source_language") or "unknown",
+        "value_label": value_label,
         "element": rule.get("element"),
         "parameter": rule.get("parameter"),
         "legal_force": legal_force,
-        "authority_label": LEGAL_FORCE_LABELS.get(
+        "authority_label": authority_labels.get(
             legal_force,
-            authority or "設計參考",
+            authority or fallback_authority,
         ),
         "manual_id": rule.get("manual_id"),
-        "manual_title": manual.get("local_title")
-        or manual.get("title")
-        or rule.get("manual_id"),
+        "manual_title": manual_title,
         "publisher": manual.get("publisher"),
         "section": source.get("section"),
         "page": source.get("page"),
@@ -543,26 +845,64 @@ def _public_rule(rule, manuals):
     }
 
 
-def _public_card(card, manuals):
+def _public_card(card, manuals, language="zh-TW"):
+    language = normalize_language(language)
     manual = manuals.get(card.get("manual_id"), {})
     source = card.get("source") or {}
+    original_title = card.get("title")
+    original_statement = card.get("summary")
+    if language == "en":
+        topics = [
+            EN_TOPIC_LABELS.get(topic, topic.replace("_", " "))
+            for topic in (card.get("topics") or [])[:3]
+        ]
+        topic_text = ", ".join(topics) or "street-design practice"
+        title = f"Method reference — {topic_text.title()}"
+        statement = (
+            f"Comparative method guidance covering {topic_text}; apply it "
+            "alongside current Taiwan requirements and project-specific review."
+        )
+        authority_label = "Method and international comparative reference"
+        manual_title = (
+            manual.get("title")
+            or manual.get("local_title")
+            or card.get("manual_id")
+        )
+        application = statement
+        version_warning = (
+            "Check the current source edition before project use."
+            if card.get("version_warning")
+            else None
+        )
+    else:
+        title = original_title
+        statement = original_statement
+        authority_label = "方法與國際比較參考"
+        manual_title = (
+            manual.get("local_title")
+            or manual.get("title")
+            or card.get("manual_id")
+        )
+        application = card.get("application")
+        version_warning = card.get("version_warning")
     return {
         "kind": "method",
         "id": card.get("card_id"),
-        "title": card.get("title"),
-        "statement": card.get("summary"),
-        "application": card.get("application"),
-        "authority_label": "方法與國際比較參考",
+        "title": title,
+        "statement": statement,
+        "original_title": original_title,
+        "original_statement": original_statement,
+        "source_language": card.get("translation_status") or "translated-note",
+        "application": application,
+        "authority_label": authority_label,
         "manual_id": card.get("manual_id"),
-        "manual_title": manual.get("local_title")
-        or manual.get("title")
-        or card.get("manual_id"),
+        "manual_title": manual_title,
         "publisher": manual.get("publisher"),
         "section": source.get("section"),
         "page": source.get("page"),
         "source_url": manual.get("document_url")
         or manual.get("landing_url"),
-        "version_warning": card.get("version_warning"),
+        "version_warning": version_warning,
         "professional_review_required": True,
     }
 
@@ -573,7 +913,9 @@ def retrieve_evidence(
     preferences=None,
     minimum=5,
     maximum=12,
+    language="zh-TW",
 ) -> list[dict]:
+    language = normalize_language(language)
     prefs = normalize_preferences(preferences)
     profile = _profile_for_request(preset_id, request_text)
     bundle = load_bundle()
@@ -618,7 +960,9 @@ def retrieve_evidence(
         key = (rule.get("element"), rule.get("parameter"))
         if key in seen_parameters:
             continue
-        selected_rules.append(_public_rule(rule, bundle["manuals"]))
+        selected_rules.append(
+            _public_rule(rule, bundle["manuals"], language)
+        )
         seen_parameters.add(key)
         if len(selected_rules) >= target_rule_count:
             break
@@ -633,14 +977,16 @@ def retrieve_evidence(
         )
         if score < 5:
             continue
-        selected_cards.append(_public_card(card, bundle["manuals"]))
+        selected_cards.append(
+            _public_card(card, bundle["manuals"], language)
+        )
         if len(selected_cards) >= 3:
             break
 
     evidence = selected_rules + selected_cards
     if len(evidence) < minimum:
         for card in cards:
-            item = _public_card(card, bundle["manuals"])
+            item = _public_card(card, bundle["manuals"], language)
             if item["id"] not in {entry["id"] for entry in evidence}:
                 evidence.append(item)
             if len(evidence) >= minimum:
@@ -652,7 +998,9 @@ def build_design_spec(
     request_text: str,
     preset_id: str = "",
     preferences=None,
+    language="zh-TW",
 ) -> dict:
+    language = normalize_language(language)
     request_text = _clean_text(request_text)
     prefs = normalize_preferences(preferences)
     profile = _profile_for_request(preset_id, request_text)
@@ -662,57 +1010,83 @@ def build_design_spec(
         request_text,
         preset_id,
         {**prefs, "priorities": priorities},
+        language=language,
     )
-    assumptions = [
-        "單張街景無法可靠量測道路寬度；數值僅作設計檢核提示，不宣稱圖中已精確達標。",
-        "此成果為概念視覺化，不是法規符合性判定或施工圖。",
-    ]
+    if language == "en":
+        profile_copy = EN_PROFILE_COPY.get(
+            preset_id if preset_id in PRESET_PROFILES else "generic"
+        )
+        context_labels = EN_CONTEXT_LABELS
+        intensity_labels = EN_INTENSITY_LABELS
+        preserve_labels = EN_PRESERVE_LABELS
+        priority_labels = EN_PRIORITY_LABELS
+        assumptions = [
+            "A single street image cannot reliably measure right-of-way width; numeric values are design checks, not claims that the image meets an exact dimension.",
+            "This output is a concept visualization, not a compliance determination or construction drawing.",
+        ]
+    else:
+        profile_copy = profile
+        context_labels = CONTEXT_LABELS
+        intensity_labels = INTENSITY_LABELS
+        preserve_labels = PRESERVE_LABELS
+        priority_labels = PRIORITY_LABELS
+        assumptions = [
+            "單張街景無法可靠量測道路寬度；數值僅作設計檢核提示，不宣稱圖中已精確達標。",
+            "此成果為概念視覺化，不是法規符合性判定或施工圖。",
+        ]
     if prefs["street_context"] == "auto":
         assumptions.append(
-            "街道類型尚未由使用者指定，生成時採一般臺灣都市街道情境。"
+            "The user has not confirmed a street type; generation uses a general Taiwan urban-street context."
+            if language == "en"
+            else "街道類型尚未由使用者指定，生成時採一般臺灣都市街道情境。"
         )
     if prefs["target_speed_kmh"] is None:
         assumptions.append(
-            "未由照片推定法定速限；生成時只以低速、可預期行為的空間語言表達。"
+            "The legal speed limit is not inferred from the image; generation only communicates a credible low-speed design intent."
+            if language == "en"
+            else "未由照片推定法定速限；生成時只以低速、可預期行為的空間語言表達。"
         )
     return {
         "runtime_version": RUNTIME_VERSION,
+        "language": language,
         "status": "concept",
         "jurisdiction": "Taiwan",
         "request_text": request_text,
         "preset_id": preset_id if preset_id in PRESET_PROFILES else "",
-        "design_label": profile["label"],
+        "design_label": profile_copy["label"],
         "street_context": prefs["street_context"],
-        "street_context_label": CONTEXT_LABELS[prefs["street_context"]],
+        "street_context_label": context_labels[prefs["street_context"]],
         "target_speed_kmh": prefs["target_speed_kmh"],
         "intervention_intensity": prefs["intervention_intensity"],
-        "intervention_intensity_label": INTENSITY_LABELS[
+        "intervention_intensity_label": intensity_labels[
             prefs["intervention_intensity"]
         ],
         "preserve": [
-            {"id": item, "label": PRESERVE_LABELS[item]}
+            {"id": item, "label": preserve_labels[item]}
             for item in prefs["preserve"]
         ],
         "priorities": [
-            {"id": item, "label": PRIORITY_LABELS[item]}
+            {"id": item, "label": priority_labels[item]}
             for item in priorities
-            if item in PRIORITY_LABELS
+            if item in priority_labels
         ],
-        "requested_interventions": profile["visual_requirements"],
-        "spatial_order": profile["spatial_order"],
-        "negative_constraints": profile["negative_constraints"],
+        "requested_interventions": profile_copy["visual_requirements"],
+        "spatial_order": profile_copy["spatial_order"],
+        "negative_constraints": profile_copy["negative_constraints"],
         "evidence": evidence,
         "assumptions": assumptions,
         "refinement_history": [],
         "source_note": (
-            "臺灣現行規範優先；國際手冊只作比較與方法參考。"
-            "正式設計仍須依基地量測、主管機關要求與專業審查確認。"
+            "Current Taiwan requirements take precedence; international manuals are comparative methods only. Detailed design still requires site measurement, authority requirements, and professional review."
+            if language == "en"
+            else "臺灣現行規範優先；國際手冊只作比較與方法參考。正式設計仍須依基地量測、主管機關要求與專業審查確認。"
         ),
     }
 
 
-def _source_line(item, index) -> str:
-    location = "，".join(
+def _source_line(item, index, language="zh-TW") -> str:
+    language = normalize_language(language)
+    location = (", " if language == "en" else "，").join(
         part
         for part in (
             f"§{item.get('section')}" if item.get("section") else "",
@@ -720,7 +1094,19 @@ def _source_line(item, index) -> str:
         )
         if part
     )
-    value = f"；{item['value_label']}" if item.get("value_label") else ""
+    value = (
+        f"; {item['value_label']}"
+        if language == "en" and item.get("value_label")
+        else f"；{item['value_label']}"
+        if item.get("value_label")
+        else ""
+    )
+    if language == "en":
+        return (
+            f"[E{index}] {item['title']}: {item['statement']}{value} "
+            f"({item['manual_title']}{', ' + location if location else ''}; "
+            f"{item['authority_label']})"
+        )
     return (
         f"[E{index}] {item['title']}：{item['statement']}{value}"
         f"（{item['manual_title']}{'，' + location if location else ''}；"
@@ -732,15 +1118,21 @@ def compile_generation_prompt(
     spec: dict,
     refinement_text: str = "",
 ) -> str:
-    request_text = spec.get("request_text") or "改善街道人本環境"
-    priorities = "、".join(
+    language = normalize_language(spec.get("language"))
+    request_text = spec.get("request_text") or (
+        "Improve the people-first street environment"
+        if language == "en"
+        else "改善街道人本環境"
+    )
+    separator = ", " if language == "en" else "、"
+    priorities = separator.join(
         item["label"] for item in spec.get("priorities", [])
     )
-    preserved = "、".join(
+    preserved = separator.join(
         item["label"] for item in spec.get("preserve", [])
     )
     evidence_lines = "\n".join(
-        _source_line(item, index)
+        _source_line(item, index, language)
         for index, item in enumerate(spec.get("evidence", []), 1)
     )
     interventions = "\n".join(
@@ -755,9 +1147,17 @@ def compile_generation_prompt(
         else ""
     )
     speed = (
-        f"{spec['target_speed_kmh']} km/h 的目標速度空間語言"
+        (
+            f"Spatial design language for a {spec['target_speed_kmh']} km/h target speed"
+            if language == "en"
+            else f"{spec['target_speed_kmh']} km/h 的目標速度空間語言"
+        )
         if spec.get("target_speed_kmh")
-        else "不自行宣稱法定速限；以可信的低速安全空間語言表達"
+        else (
+            "Do not claim a legal speed limit; communicate a credible low-speed safety intent"
+            if language == "en"
+            else "不自行宣稱法定速限；以可信的低速安全空間語言表達"
+        )
     )
     return f"""[ROLE]
 You are a street-design visualization specialist working in a Taiwan context.
@@ -811,10 +1211,17 @@ def refine_design_spec(spec: dict, refinement_text: str) -> dict:
         "preserve": [item["id"] for item in spec.get("preserve", [])],
         "priorities": [item["id"] for item in spec.get("priorities", [])],
     }
+    language = normalize_language(spec.get("language"))
+    combined_request = (
+        f"{original}; refinement: {refinement_text}"
+        if language == "en"
+        else f"{original}；後續調整：{refinement_text}"
+    )
     updated = build_design_spec(
-        f"{original}；後續調整：{refinement_text}",
+        combined_request,
         spec.get("preset_id") or "",
         preferences,
+        language=language,
     )
     history = list(spec.get("refinement_history") or [])
     history.append(refinement_text)
@@ -827,6 +1234,35 @@ def refine_design_spec(spec: dict, refinement_text: str) -> dict:
 
 
 def build_visual_audit_checklist(spec: dict) -> list[dict]:
+    language = normalize_language(spec.get("language"))
+    if language == "en":
+        return [
+            {
+                "id": "preservation",
+                "label": "Buildings, entrances, viewpoint, and lighting remain consistent",
+                "status": "pending",
+            },
+            {
+                "id": "requested_change",
+                "label": f"{spec.get('design_label', 'The requested transformation')} is clearly visible",
+                "status": "pending",
+            },
+            {
+                "id": "continuity",
+                "label": "Walking, cycling, and transit routes are continuous and conflict-aware",
+                "status": "pending",
+            },
+            {
+                "id": "accessibility",
+                "label": "Accessible clear space, ramps, and crossing connections look plausible",
+                "status": "pending",
+            },
+            {
+                "id": "realism",
+                "label": "Scale, paving, drainage, planting, and markings look credible",
+                "status": "pending",
+            },
+        ]
     checks = [
         {
             "id": "preservation",

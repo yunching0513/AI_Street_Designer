@@ -68,6 +68,10 @@ def test_index_renders_both_provider_choices(monkeypatch):
     assert b'id="design-plan-panel"' in response.data
     assert b'id="edit-mask-canvas"' in response.data
     assert b'id="result-review"' in response.data
+    assert b'class="language-switch"' in response.data
+    assert b'data-language="zh-TW"' in response.data
+    assert b'data-language="en"' in response.data
+    assert b'data-i18n="loadingAccess"' in response.data
     assert '確認影片設定'.encode() in response.data
     assert response.headers['Cache-Control'] == 'no-store'
 
@@ -250,6 +254,57 @@ def test_design_plan_returns_retrieved_evidence_and_prompt():
     )
     assert '[RETRIEVED DESIGN EVIDENCE]' in payload['generation_prompt']
     assert 'concept image' in payload['generation_prompt']
+
+
+def test_design_plan_supports_english_and_preserves_source_wording():
+    response = street_app.app.test_client().post(
+        '/api/design-plan',
+        headers={'X-UI-Language': 'en'},
+        json={
+            'custom_prompt': 'Add a safe, continuous protected bike lane',
+            'preset_id': 'protected-bike-lane',
+            'language': 'en',
+            'design_preferences': {
+                'street_context': 'main_street',
+                'target_speed_kmh': 30,
+                'priorities': ['cycling', 'safety'],
+            },
+        },
+    )
+
+    payload = response.get_json()
+    spec = payload['design_spec']
+    assert response.status_code == 200
+    assert spec['language'] == 'en'
+    assert spec['design_label'] == 'Protected bicycle lane'
+    assert spec['street_context_label'] == 'Main street'
+    assert all(item['authority_label'] for item in spec['evidence'])
+    assert any(
+        item.get('original_statement')
+        and item['original_statement'] != item['statement']
+        for item in spec['evidence']
+    )
+    assert '[RETRIEVED DESIGN EVIDENCE]' in payload['generation_prompt']
+    assert '[USER\'S DESIGN GOAL — PRIMARY]' in payload['generation_prompt']
+    assert 'Add a safe, continuous protected bike lane' in (
+        payload['generation_prompt']
+    )
+
+
+def test_api_errors_follow_requested_language():
+    response = street_app.app.test_client().post(
+        '/api/design-plan',
+        headers={'X-UI-Language': 'en'},
+        json={'custom_prompt': '', 'language': 'en'},
+    )
+
+    payload = response.get_json()
+    assert response.status_code == 400
+    assert payload['language'] == 'en'
+    assert payload['code'] == 'prompt_required'
+    assert payload['error'] == (
+        'Describe the street transformation you would like to create.'
+    )
 
 
 def test_transform_rejects_unconfigured_provider(monkeypatch):
@@ -605,6 +660,7 @@ def test_session_serialization_round_trip_uses_json_and_recreates_lock():
         }],
         'history': [{'role': 'assistant', 'message': '第一版完成'}],
         'initial_prompt': '增加樹木',
+        'language': 'en',
         'design_spec': {
             'status': 'concept',
             'design_label': '綠色街道',
@@ -625,6 +681,7 @@ def test_session_serialization_round_trip_uses_json_and_recreates_lock():
     assert b'_operation_lock' not in raw
     assert restored['versions'][0]['bytes'] == image_bytes
     assert restored['provider'] == 'openai'
+    assert restored['language'] == 'en'
     assert restored['history'] == session['history']
     assert restored['design_spec'] == session['design_spec']
     assert restored['audit'] == session['audit']

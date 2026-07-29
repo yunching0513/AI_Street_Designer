@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>AI Street Designer | Transform Your City</title>
+    <title>AI Street Designer｜一起改造你的街道</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%2362A968'/%3E%3Cpath d='M50 76V39M49 50C33 50 24 40 24 25c16 0 25 9 25 25Zm2-7c2-15 11-22 26-21-1 14-10 22-26 21Z' fill='none' stroke='white' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -28,7 +28,11 @@
                 <h1>Street<span class="highlight">Designer</span></h1>
                 <span class="logo-emoji">✨</span>
             </div>
-            <p class="subtitle">和小綠一起，把你家門口的街道變得更可愛 💕</p>
+            <p class="subtitle" data-i18n="subtitle">和小綠一起，把你家門口的街道變得更可愛 💕</p>
+            <div class="language-switch" role="group" aria-label="Language">
+                <button type="button" data-language="zh-TW" aria-pressed="true">中文</button>
+                <button type="button" data-language="en" aria-pressed="false">EN</button>
+            </div>
         </header>
 
         <div class="app-interface">
@@ -36,8 +40,8 @@
                 <input type="file" id="file-input" accept="image/*" hidden>
                 <div class="upload-content" id="upload-content">
                     <div class="upload-icon">📸</div>
-                    <h3>把街景照片丟過來</h3>
-                    <p>拖曳上傳，或點一下選圖 ✨</p>
+                    <h3 data-i18n="uploadTitle">把街景照片丟過來</h3>
+                    <p data-i18n="uploadHint">拖曳上傳，或點一下選圖 ✨</p>
                 </div>
                 <div class="preview-container hidden" id="preview-container">
                     <img id="image-preview" src="" alt="Preview">
@@ -45,8 +49,9 @@
                         id="edit-mask-canvas"
                         class="edit-mask-canvas hidden"
                         aria-label="在照片上畫出希望 AI 改造的範圍"
+                        data-i18n-aria-label="maskCanvas"
                     ></canvas>
-                    <button class="remove-btn" id="remove-image">
+                    <button class="remove-btn" id="remove-image" aria-label="移除照片" data-i18n-aria-label="removeImage">
                         <i class="fa-solid fa-times"></i>
                     </button>
                 </div>
@@ -55,37 +60,41 @@
             <div class="controls-section">
                 <!-- Preset Prompts -->
                 <div class="control-group">
-                    <label>選一個改造風格</label>
+                    <label data-i18n="styleLabel">選一個改造風格</label>
                     <div class="grid-options">
                         <button class="option-card" data-preset-id="widen-sidewalks" data-prompt="Widen sidewalks for better walkability">
                             <span class="option-emoji">🚶</span>
-                            <span>加寬人行道</span>
+                            <span data-i18n="widenSidewalks">加寬人行道</span>
                         </button>
                         <button class="option-card" data-preset-id="transit-priority" data-prompt="Add bus bays and transit priority lanes">
                             <span class="option-emoji">🚌</span>
-                            <span>公車彎月台</span>
+                            <span data-i18n="transitPriority">公車彎月台</span>
                         </button>
                         <button class="option-card" data-preset-id="protected-bike-lane" data-prompt="Add bike lanes and cycling infrastructure">
                             <span class="option-emoji">🚲</span>
-                            <span>自行車道</span>
+                            <span data-i18n="bikeLane">自行車道</span>
                         </button>
                         <button class="option-card" data-preset-id="green-street" data-prompt="Increase greenery, add trees and planters">
                             <span class="option-emoji">🌳</span>
-                            <span>綠意盎然</span>
+                            <span data-i18n="greenStreet">綠意盎然</span>
                         </button>
                         <button class="option-card" data-preset-id="reduce-motor-traffic" data-prompt="Remove most visible private cars and scooters, and reclaim the street space for people">
                             <span class="option-emoji">🚘</span>
-                            <span>減少汽機車</span>
+                            <span data-i18n="reduceTraffic">減少汽機車</span>
                         </button>
                     </div>
                 </div>
 
                 <!-- Image provider -->
                 <div class="control-group">
-                    <label>選擇圖像生成器 ✦</label>
-                    <div class="provider-options" role="radiogroup" aria-label="圖像生成器">
+                    <label data-i18n="providerLabel">選擇圖像生成器 ✦</label>
+                    <div class="provider-options" role="radiogroup" aria-label="圖像生成器" data-i18n-aria-label="providerAria">
                         {% for provider in image_providers %}
-                        <label class="provider-option{% if not provider.available %} provider-unavailable{% endif %}">
+                        <label
+                            class="provider-option{% if not provider.available %} provider-unavailable{% endif %}"
+                            data-model="{{ provider.model }}"
+                            data-available="{{ 'true' if provider.available else 'false' }}"
+                        >
                             <input
                                 type="radio"
                                 name="image-provider"
@@ -109,9 +118,9 @@
 
                 <!-- Custom Prompt -->
                 <div class="control-group">
-                    <label>或是自己許個願 💭</label>
+                    <label data-i18n="customWish">或是自己許個願 💭</label>
                     <div class="input-wrapper">
-                        <input type="text" id="custom-prompt" maxlength="2000" placeholder="例如：步行區、有咖啡店和露天座位...">
+                        <input type="text" id="custom-prompt" maxlength="2000" placeholder="例如：步行區、有咖啡店和露天座位..." data-i18n-placeholder="promptPlaceholder">
                         <button id="generate-btn" disabled>
                             檢視設計計畫 <span>🔎</span>
                         </button>
@@ -119,25 +128,25 @@
                 </div>
 
                 <div class="control-group">
-                    <label>和小綠一起定義這條街 🤝</label>
+                    <label data-i18n="coDefine">和小綠一起定義這條街 🤝</label>
                     <div class="participation-card">
                         <div class="participation-grid">
                             <label>
-                                <span>街道情境</span>
+                                <span data-i18n="streetContext">街道情境</span>
                                 <select id="street-context">
-                                    <option value="auto">讓 AI 初步判讀</option>
-                                    <option value="main_street">主要街道</option>
-                                    <option value="residential">住宅生活街道</option>
-                                    <option value="school">通學環境</option>
-                                    <option value="transit_corridor">大眾運輸廊道</option>
-                                    <option value="urban_core">市中心街道</option>
-                                    <option value="neighbourhood">鄰里街道</option>
+                                    <option value="auto" data-i18n="contextAuto">讓 AI 初步判讀</option>
+                                    <option value="main_street" data-i18n="contextMain">主要街道</option>
+                                    <option value="residential" data-i18n="contextResidential">住宅生活街道</option>
+                                    <option value="school" data-i18n="contextSchool">通學環境</option>
+                                    <option value="transit_corridor" data-i18n="contextTransit">大眾運輸廊道</option>
+                                    <option value="urban_core" data-i18n="contextUrban">市中心街道</option>
+                                    <option value="neighbourhood" data-i18n="contextNeighbourhood">鄰里街道</option>
                                 </select>
                             </label>
                             <label>
-                                <span>希望傳達的目標速度</span>
+                                <span data-i18n="targetSpeed">希望傳達的目標速度</span>
                                 <select id="target-speed">
-                                    <option value="">不指定</option>
+                                    <option value="" data-i18n="unspecified">不指定</option>
                                     <option value="10">10 km/h</option>
                                     <option value="20">20 km/h</option>
                                     <option value="30">30 km/h</option>
@@ -147,48 +156,48 @@
                         </div>
 
                         <fieldset class="participation-fieldset">
-                            <legend>改造幅度</legend>
+                            <legend data-i18n="intensity">改造幅度</legend>
                             <div class="segmented-options">
-                                <label><input type="radio" name="intervention-intensity" value="light"><span>輕量改善</span></label>
-                                <label><input type="radio" name="intervention-intensity" value="balanced" checked><span>平衡改造</span></label>
-                                <label><input type="radio" name="intervention-intensity" value="transformative"><span>大幅重分配</span></label>
+                                <label><input type="radio" name="intervention-intensity" value="light"><span data-i18n="light">輕量改善</span></label>
+                                <label><input type="radio" name="intervention-intensity" value="balanced" checked><span data-i18n="balanced">平衡改造</span></label>
+                                <label><input type="radio" name="intervention-intensity" value="transformative"><span data-i18n="transformative">大幅重分配</span></label>
                             </div>
                         </fieldset>
 
                         <fieldset class="participation-fieldset">
-                            <legend>優先照顧誰／什麼</legend>
+                            <legend data-i18n="priorities">優先照顧誰／什麼</legend>
                             <div class="check-chip-grid" id="priority-options">
-                                <label><input type="checkbox" value="walking"><span>🚶 步行</span></label>
-                                <label><input type="checkbox" value="cycling"><span>🚲 自行車</span></label>
-                                <label><input type="checkbox" value="transit"><span>🚌 大眾運輸</span></label>
-                                <label><input type="checkbox" value="greenery"><span>🌳 綠化遮蔭</span></label>
-                                <label><input type="checkbox" value="accessibility"><span>♿ 無障礙</span></label>
-                                <label><input type="checkbox" value="safety"><span>🛡️ 道路安全</span></label>
-                                <label><input type="checkbox" value="local_activity"><span>☕ 店家活動</span></label>
+                                <label><input type="checkbox" value="walking"><span data-i18n="walking">🚶 步行</span></label>
+                                <label><input type="checkbox" value="cycling"><span data-i18n="cycling">🚲 自行車</span></label>
+                                <label><input type="checkbox" value="transit"><span data-i18n="transit">🚌 大眾運輸</span></label>
+                                <label><input type="checkbox" value="greenery"><span data-i18n="greenery">🌳 綠化遮蔭</span></label>
+                                <label><input type="checkbox" value="accessibility"><span data-i18n="accessibility">♿ 無障礙</span></label>
+                                <label><input type="checkbox" value="safety"><span data-i18n="safety">🛡️ 道路安全</span></label>
+                                <label><input type="checkbox" value="local_activity"><span data-i18n="localActivity">☕ 店家活動</span></label>
                             </div>
                         </fieldset>
 
                         <fieldset class="participation-fieldset">
-                            <legend>需要保留</legend>
+                            <legend data-i18n="preserve">需要保留</legend>
                             <div class="check-chip-grid" id="preserve-options">
-                                <label><input type="checkbox" value="existing_trees"><span>既有好樹</span></label>
-                                <label><input type="checkbox" value="parking"><span>部分停車</span></label>
-                                <label><input type="checkbox" value="loading"><span>裝卸短停</span></label>
-                                <label><input type="checkbox" value="transit"><span>公車營運</span></label>
+                                <label><input type="checkbox" value="existing_trees"><span data-i18n="existingTrees">既有好樹</span></label>
+                                <label><input type="checkbox" value="parking"><span data-i18n="parking">部分停車</span></label>
+                                <label><input type="checkbox" value="loading"><span data-i18n="loadingAccess">裝卸短停</span></label>
+                                <label><input type="checkbox" value="transit"><span data-i18n="transitOps">公車營運</span></label>
                             </div>
-                            <p class="fixed-preserve-note">建築、店面出入口、原始視角及救災通行會固定保留。</p>
+                            <p class="fixed-preserve-note" data-i18n="fixedPreserve">建築、店面出入口、原始視角及救災通行會固定保留。</p>
                         </fieldset>
 
                         <div class="mask-control">
                             <label class="mask-toggle">
                                 <input type="checkbox" id="use-edit-mask">
-                                <span>我想在照片上畫出可改造範圍</span>
+                                <span data-i18n="useMask">我想在照片上畫出可改造範圍</span>
                             </label>
                             <div class="mask-tools hidden" id="mask-tools">
-                                <span>用手指或滑鼠塗綠希望改造的位置</span>
-                                <button type="button" id="clear-mask">清除重畫</button>
+                                <span data-i18n="maskHelp">用手指或滑鼠塗綠希望改造的位置</span>
+                                <button type="button" id="clear-mask" data-i18n="clearMask">清除重畫</button>
                             </div>
-                            <small id="mask-provider-note">
+                            <small id="mask-provider-note" data-i18n="maskNote">
                                 OpenAI 會直接使用透明遮罩；Gemini 會把它當作範圍提示。
                             </small>
                         </div>
@@ -197,21 +206,21 @@
 
                 <!-- Output resolution -->
                 <div class="control-group">
-                    <label>畫質 🖼️</label>
+                    <label data-i18n="quality">畫質 🖼️</label>
                     <div class="input-wrapper" style="gap:8px">
                         <select id="resolution-select" style="flex:0 0 auto;padding:10px 14px;border-radius:14px;border:1px solid #D8D1BF;background:#fff;font-size:14px;cursor:pointer;font-family:inherit">
-                            <option value="1K">標準 1K（最快）</option>
-                            <option value="2K" selected>高畫質 2K（建議）</option>
-                            <option value="4K">超高 4K（較慢、成本較高）</option>
+                            <option value="1K" data-i18n="resolution1K">標準 1K（最快）</option>
+                            <option value="2K" selected data-i18n="resolution2K">高畫質 2K（建議）</option>
+                            <option value="4K" data-i18n="resolution4K">超高 4K（較慢、成本較高）</option>
                         </select>
-                        <span style="font-size:12px;color:#6A665A">之後跟小綠共創的調整版本也會用這個畫質</span>
+                        <span style="font-size:12px;color:#6A665A" data-i18n="qualityNote">之後跟小綠共創的調整版本也會用這個畫質</span>
                     </div>
                 </div>
 
                 <section class="design-plan-panel hidden" id="design-plan-panel" aria-live="polite">
                     <div class="design-plan-heading">
                         <div>
-                            <span class="plan-kicker">AI × 使用者共同確認</span>
+                            <span class="plan-kicker" data-i18n="planKicker">AI × 使用者共同確認</span>
                             <h3 id="design-plan-title">這次的設計計畫</h3>
                         </div>
                         <span class="evidence-count" id="evidence-count"></span>
@@ -220,11 +229,11 @@
                     <div class="evidence-list" id="evidence-list"></div>
                     <div class="assumption-list" id="assumption-list"></div>
                     <details class="prompt-details">
-                        <summary>查看將送給圖片模型的完整 Prompt</summary>
+                        <summary data-i18n="promptDetails">查看將送給圖片模型的完整 Prompt</summary>
                         <pre id="generation-prompt-preview"></pre>
                     </details>
                     <button type="button" class="confirm-generate-btn" id="confirm-generate-btn">
-                        確認計畫，開始生成 <span>✨</span>
+                        <span data-i18n="confirmGenerate">確認計畫，開始生成</span> <span>✨</span>
                     </button>
                 </section>
             </div>
@@ -234,10 +243,10 @@
         <div class="result-section hidden" id="result-section">
             <div class="result-header">
                 <div class="result-title">
-                    <h2>✨ 你的新街道</h2>
+                    <h2 data-i18n="resultTitle">✨ 你的新街道</h2>
                     <span class="round-badge" id="round-badge">共創回合 1</span>
                 </div>
-                <button class="close-result" id="close-result" aria-label="關閉">✕</button>
+                <button class="close-result" id="close-result" aria-label="關閉" data-i18n-aria-label="close">✕</button>
             </div>
 
             <div class="result-body">
@@ -248,12 +257,12 @@
                             <div class="cute-spinner">
                                 <span>🌱</span>
                             </div>
-                            <p id="loading-text">小綠正在動筆中...</p>
+                            <p id="loading-text" data-i18n="loading">小綠正在動筆中...</p>
                         </div>
-                        <img id="result-image" class="comparison-image comparison-after" src="" alt="改造後的街道設計">
-                        <img id="before-image" class="comparison-image comparison-before" src="" alt="改造前的原始街道">
-                        <div class="comparison-label comparison-label-before" aria-hidden="true">Before · 改造前</div>
-                        <div class="comparison-label comparison-label-after" aria-hidden="true">After · 改造後</div>
+                        <img id="result-image" class="comparison-image comparison-after" src="" alt="改造後的街道設計" data-i18n-alt="resultAlt">
+                        <img id="before-image" class="comparison-image comparison-before" src="" alt="改造前的原始街道" data-i18n-alt="beforeAlt">
+                        <div class="comparison-label comparison-label-before" aria-hidden="true" data-i18n="beforeLabel">Before · 改造前</div>
+                        <div class="comparison-label comparison-label-after" aria-hidden="true" data-i18n="afterLabel">After · 改造後</div>
                         <input
                             type="range"
                             class="comparison-range"
@@ -262,6 +271,7 @@
                             max="100"
                             value="50"
                             aria-label="拖曳比較改造前後"
+                            data-i18n-aria-label="compareAria"
                             aria-valuetext="改造前 50%，改造後 50%"
                         >
                         <div class="comparison-divider" aria-hidden="true">
@@ -284,18 +294,18 @@
                     <div class="copilot-header">
                         <div class="copilot-avatar">🌱</div>
                         <div class="copilot-meta">
-                            <strong>小綠</strong>
-                            <span>你的街道設計小夥伴</span>
+                            <strong data-i18n="copilotName">小綠</strong>
+                            <span data-i18n="copilotSubtitle">你的街道設計小夥伴</span>
                         </div>
                     </div>
                     <section class="result-review" id="result-review">
                         <div class="result-review-heading">
-                            <strong>設計依據與畫面檢查</strong>
+                            <strong data-i18n="reviewHeading">設計依據與畫面檢查</strong>
                             <span id="audit-score">待檢查</span>
                         </div>
-                        <p id="audit-summary">生成後會在這裡檢查設計是否清楚、連續且可信。</p>
+                        <p id="audit-summary" data-i18n="auditIntro">生成後會在這裡檢查設計是否清楚、連續且可信。</p>
                         <details>
-                            <summary>查看依據與檢查項目</summary>
+                            <summary data-i18n="reviewDetails">查看依據與檢查項目</summary>
                             <div id="result-audit-checks" class="result-audit-checks"></div>
                             <div id="result-evidence" class="result-evidence"></div>
                             <p class="audit-disclaimer" id="audit-disclaimer"></p>
@@ -304,8 +314,8 @@
                     <div class="copilot-messages" id="copilot-messages"></div>
                     <div class="copilot-suggestions" id="copilot-suggestions"></div>
                     <form class="copilot-input" id="copilot-input-form">
-                        <input type="text" id="copilot-input" maxlength="1000" placeholder="跟小綠聊聊：再多一些樹、人行道更寬..." autocomplete="off">
-                        <button type="submit" id="copilot-send" aria-label="送出">💌</button>
+                        <input type="text" id="copilot-input" maxlength="1000" placeholder="跟小綠聊聊：再多一些樹、人行道更寬..." autocomplete="off" data-i18n-placeholder="copilotPlaceholder">
+                        <button type="submit" id="copilot-send" aria-label="送出" data-i18n-aria-label="send">💌</button>
                     </form>
                 </aside>
             </div>
@@ -318,67 +328,67 @@
                     aria-labelledby="video-setup-title"
                     aria-describedby="video-setup-description"
                 >
-                    <button class="video-modal-close" id="video-modal-close" type="button" aria-label="關閉影片設定">✕</button>
+                    <button class="video-modal-close" id="video-modal-close" type="button" aria-label="關閉影片設定" data-i18n-aria-label="closeVideo">✕</button>
 
                     <div class="video-setup-heading">
-                        <span class="video-setup-kicker">WALK THROUGH YOUR DESIGN</span>
-                        <h3 id="video-setup-title">走進你設計的街道</h3>
-                        <p id="video-setup-description">鏡頭會像行人的視線，沿著人行道自然向前移動。</p>
+                        <span class="video-setup-kicker" data-i18n="videoKicker">WALK THROUGH YOUR DESIGN</span>
+                        <h3 id="video-setup-title" data-i18n="videoSetupTitle">走進你設計的街道</h3>
+                        <p id="video-setup-description" data-i18n="videoSetupDescription">鏡頭會像行人的視線，沿著人行道自然向前移動。</p>
                     </div>
 
                     <form id="video-setup-form">
                         <fieldset class="video-option-group">
-                            <legend>步行節奏</legend>
+                            <legend data-i18n="walkingPace">步行節奏</legend>
                             <div class="video-choice-grid video-speed-grid">
                                 <label class="video-choice">
                                     <input type="radio" name="video-speed" value="gentle">
                                     <span aria-hidden="true">🍃</span>
-                                    <strong>慢慢散步</strong>
-                                    <small>悠閒看街景</small>
+                                    <strong data-i18n="gentle">慢慢散步</strong>
+                                    <small data-i18n="gentleSub">悠閒看街景</small>
                                 </label>
                                 <label class="video-choice">
                                     <input type="radio" name="video-speed" value="natural" checked>
                                     <span aria-hidden="true">🚶</span>
-                                    <strong>自然步行</strong>
-                                    <small>最適合預覽</small>
+                                    <strong data-i18n="natural">自然步行</strong>
+                                    <small data-i18n="naturalSub">最適合預覽</small>
                                 </label>
                                 <label class="video-choice">
                                     <input type="radio" name="video-speed" value="brisk">
                                     <span aria-hidden="true">✨</span>
-                                    <strong>輕快前進</strong>
-                                    <small>更有動態感</small>
+                                    <strong data-i18n="brisk">輕快前進</strong>
+                                    <small data-i18n="briskSub">更有動態感</small>
                                 </label>
                             </div>
                         </fieldset>
 
                         <div class="video-options-row">
                             <fieldset class="video-option-group">
-                                <legend>影片長度</legend>
+                                <legend data-i18n="duration">影片長度</legend>
                                 <div class="video-segmented">
-                                    <label><input type="radio" name="video-duration" value="8" checked><span>8 秒</span></label>
-                                    <label><input type="radio" name="video-duration" value="16"><span>16 秒</span></label>
-                                    <label><input type="radio" name="video-duration" value="20"><span>20 秒</span></label>
+                                    <label><input type="radio" name="video-duration" value="8" checked><span data-i18n="seconds" data-i18n-value="8">8 秒</span></label>
+                                    <label><input type="radio" name="video-duration" value="16"><span data-i18n="seconds" data-i18n-value="16">16 秒</span></label>
+                                    <label><input type="radio" name="video-duration" value="20"><span data-i18n="seconds" data-i18n-value="20">20 秒</span></label>
                                 </div>
                             </fieldset>
 
                             <fieldset class="video-option-group">
-                                <legend>畫面比例</legend>
+                                <legend data-i18n="format">畫面比例</legend>
                                 <div class="video-segmented">
-                                    <label><input type="radio" name="video-format" value="landscape" checked><span>▰ 橫式</span></label>
-                                    <label><input type="radio" name="video-format" value="portrait"><span>▯ 直式</span></label>
+                                    <label><input type="radio" name="video-format" value="landscape" checked><span data-i18n="landscape">▰ 橫式</span></label>
+                                    <label><input type="radio" name="video-format" value="portrait"><span data-i18n="portrait">▯ 直式</span></label>
                                 </div>
                             </fieldset>
                         </div>
 
                         <div class="video-safety-note">
                             <span aria-hidden="true">👁️</span>
-                            <p><strong>第一人稱漫遊</strong><br>畫面不會出現使用者本人，降低人臉造成的生成失敗。</p>
+                            <p><strong data-i18n="firstPerson">第一人稱漫遊</strong><br><span data-i18n="safetyNote">畫面不會出現使用者本人，降低人臉造成的生成失敗。</span></p>
                         </div>
 
                         <div class="video-form-actions">
-                            <button class="video-cancel-button" id="video-cancel" type="button">稍後再說</button>
+                            <button class="video-cancel-button" id="video-cancel" type="button" data-i18n="later">稍後再說</button>
                             <button class="video-confirm-button" type="submit">
-                                <span>確認影片設定</span>
+                                <span data-i18n="confirmVideo">確認影片設定</span>
                                 <span aria-hidden="true">🎬</span>
                             </button>
                         </div>

@@ -1,5 +1,6 @@
 from knowledge_base.knowledge_runtime import (
     build_design_spec,
+    build_visual_audit_checklist,
     compile_generation_prompt,
     load_bundle,
     refine_design_spec,
@@ -68,3 +69,28 @@ def test_refinement_retrieves_again_and_preserves_design_frame():
     assert refined['intervention_intensity'] == 'balanced'
     assert refined['refinement_history'] == ['Add more shade trees']
     assert 5 <= len(refined['evidence']) <= 12
+
+
+def test_english_spec_prompt_and_audit_are_localized():
+    spec = build_design_spec(
+        'Create a shaded, accessible residential street',
+        'green-street',
+        {
+            'street_context': 'residential',
+            'priorities': ['walking', 'greenery', 'accessibility'],
+            'preserve': ['existing_trees'],
+        },
+        language='en',
+    )
+    prompt = compile_generation_prompt(spec)
+    audit = build_visual_audit_checklist(spec)
+    refined = refine_design_spec(spec, 'Add a raised crossing')
+
+    assert spec['language'] == 'en'
+    assert spec['design_label'] == 'Green living street'
+    assert spec['street_context_label'] == 'Residential living street'
+    assert 'healthy existing trees' in prompt
+    assert audit[0]['label'].startswith('Buildings, entrances')
+    assert audit[1]['label'] == 'Green living street is clearly visible'
+    assert refined['language'] == 'en'
+    assert refined['refinement_history'] == ['Add a raised crossing']

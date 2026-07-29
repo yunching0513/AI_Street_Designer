@@ -21,7 +21,7 @@ import uuid
 
 # Bumped by hand on each deploy-worthy change — /api/diag reports it, so we
 # can tell at a glance whether the running instance actually has a fix.
-CODE_VERSION = '2026-07-29-knowledge-runtime1'
+CODE_VERSION = '2026-07-29-bilingual1'
 
 def rss_mb():
     """Resident memory of this worker, in MB (Linux)."""
@@ -52,6 +52,7 @@ from knowledge_base.knowledge_runtime import (
     build_design_spec,
     build_visual_audit_checklist,
     compile_generation_prompt,
+    normalize_language,
     normalize_preferences,
     public_design_spec,
     refine_design_spec,
@@ -453,6 +454,44 @@ GREETING_SYSTEM_PROMPT = COPILOT_PERSONA + """
   "suggestions": ["建議1", "建議2", "建議3"]
 }"""
 
+EN_COPILOT_PERSONA = """You are Greenie 🌱, a warm, observant AI street-design co-pilot who cares about sustainable, people-first streets.
+Work alongside the user, notice visible design details, and reply only in natural English. Keep each response to 2–4 sentences and use no more than two emoji."""
+
+EN_CHAT_SYSTEM_PROMPT = EN_COPILOT_PERSONA + """
+
+For every user message:
+1. Inspect the latest street image.
+2. Classify the intent:
+   - "refine" when the user wants a visible image change.
+   - "chat" for questions, reactions, or discussion.
+3. Reply warmly and mention visible details when helpful.
+4. Offer three short next-step suggestions.
+5. For a refinement, write a precise English image-editing instruction; otherwise leave refine_prompt empty.
+
+Return JSON only:
+{
+  "intent": "refine" or "chat",
+  "message": "English reply",
+  "refine_prompt": "English image-edit instruction or an empty string",
+  "suggestions": ["Suggestion 1", "Suggestion 2", "Suggestion 3"]
+}"""
+
+EN_GREETING_SYSTEM_PROMPT = EN_COPILOT_PERSONA + """
+
+The user uploaded a street image and requested: "{user_prompt}"
+The first design version is attached.
+
+Please:
+1. Welcome the user in 2–3 sentences and identify specific visible changes.
+2. Ask one engaging question that invites co-design.
+3. Offer three short next-step suggestions.
+
+Return JSON only:
+{
+  "message": "English welcome message",
+  "suggestions": ["Suggestion 1", "Suggestion 2", "Suggestion 3"]
+}"""
+
 
 def _parse_json_response(text):
     """Robustly parse JSON from a possibly fenced LLM response."""
@@ -852,14 +891,25 @@ def _copilot_generate_json(parts):
 
 
 def _pending_visual_audit(design_spec):
+    language = normalize_language((design_spec or {}).get('language'))
     return {
         'status': 'not_run',
         'score': None,
-        'summary': '尚未完成模型視覺稽核，請由使用者與設計專業者共同確認。',
+        'summary': (
+            'The model visual audit has not run; please review this concept with users and a design professional.'
+            if language == 'en'
+            else '尚未完成模型視覺稽核，請由使用者與設計專業者共同確認。'
+        ),
         'checks': build_visual_audit_checklist(design_spec or {}),
         'disclaimer': (
-            '只檢查畫面可見的一致性與合理性，不代表尺寸量測、'
-            '法規符合或工程可施工性已獲確認。'
+            (
+                'This checks visible consistency and plausibility only; it does not confirm dimensions, compliance, or constructability.'
+            )
+            if language == 'en'
+            else (
+                '只檢查畫面可見的一致性與合理性，不代表尺寸量測、'
+                '法規符合或工程可施工性已獲確認。'
+            )
         ),
     }
 
@@ -899,20 +949,51 @@ def _normalize_visual_audit(data, design_spec):
     return {
         'status': 'reviewed',
         'score': score,
-        'summary': str(data.get('summary') or '已完成畫面初步檢查。')[:400],
+        'summary': str(
+            data.get('summary')
+            or (
+                'The initial visual review is complete.'
+                if normalize_language(design_spec.get('language')) == 'en'
+                else '已完成畫面初步檢查。'
+            )
+        )[:400],
         'checks': checks,
         'disclaimer': fallback['disclaimer'],
     }
 
 
 def _visual_audit_prompt(design_spec):
+    language = normalize_language(design_spec.get('language'))
     checklist = build_visual_audit_checklist(design_spec)
-    interventions = '；'.join(
+    interventions = ('; ' if language == 'en' else '；').join(
         design_spec.get('requested_interventions', [])
     )
     check_lines = '\n'.join(
         f"- {item['id']}: {item['label']}" for item in checklist
     )
+    if language == 'en':
+        return f"""You are visually auditing a street-design concept image.
+Assess only what is visible. Do not claim measured dimensions, legal compliance,
+or construction readiness.
+
+Design goal: {design_spec.get('design_label', 'People-first street improvement')}
+Expected visible changes: {interventions}
+
+Checks:
+{check_lines}
+
+Return JSON only:
+{{
+  "score": "integer from 0 to 100",
+  "summary": "English summary, no more than two sentences",
+  "checks": [
+    {{"id":"preservation","status":"pass|warning|fail","note":"visible evidence"}},
+    {{"id":"requested_change","status":"pass|warning|fail","note":"visible evidence"}},
+    {{"id":"continuity","status":"pass|warning|fail","note":"visible evidence"}},
+    {{"id":"accessibility","status":"pass|warning|fail","note":"visible evidence"}},
+    {{"id":"realism","status":"pass|warning|fail","note":"visible evidence"}}
+  ]
+}}"""
     return f"""你是街道設計概念圖的視覺稽核員。只依附圖中可見內容檢查，
 不可宣稱已量測尺寸、符合法規或可直接施工。
 
@@ -959,10 +1040,19 @@ def _generate_copilot_greeting(
     design_spec=None,
 ):
     """Review the new image and craft a greeting plus visual audit."""
+    language = normalize_language((design_spec or {}).get('language'))
     pending_audit = _pending_visual_audit(design_spec or {})
     fallback = {
-        'message': '嗨，我是小綠 🌱 第一版設計出來了！你覺得整體感覺如何？想往哪個方向繼續調整？',
-        'suggestions': ['再加一些樹', '加點街頭藝術', '換成夜景氛圍'],
+        'message': (
+            'Hi, I’m Greenie 🌱 Your first design is ready. How does the overall direction feel, and what would you like to adjust next?'
+            if language == 'en'
+            else '嗨，我是小綠 🌱 第一版設計出來了！你覺得整體感覺如何？想往哪個方向繼續調整？'
+        ),
+        'suggestions': (
+            ['Add more trees', 'Improve crossings', 'Try an evening view']
+            if language == 'en'
+            else ['再加一些樹', '加點街頭藝術', '換成夜景氛圍']
+        ),
         'audit': pending_audit,
     }
     if not client:
@@ -970,17 +1060,35 @@ def _generate_copilot_greeting(
     try:
         # str.replace, NOT str.format — the template's JSON example braces
         # make .format() raise KeyError on every single call.
-        prompt = GREETING_SYSTEM_PROMPT.replace(
+        prompt_template = (
+            EN_GREETING_SYSTEM_PROMPT
+            if language == 'en'
+            else GREETING_SYSTEM_PROMPT
+        )
+        prompt = prompt_template.replace(
             '{user_prompt}',
-            user_prompt or "讓街道更宜居",
+            user_prompt
+            or (
+                "Make the street more liveable"
+                if language == 'en'
+                else "讓街道更宜居"
+            ),
         )
         if design_spec:
             prompt += (
-                "\n\n請在同一份 JSON 另外加入 visual_audit 物件。"
-                "\n"
+                (
+                    "\n\nAdd a visual_audit object to the same JSON response."
+                    if language == 'en'
+                    else "\n\n請在同一份 JSON 另外加入 visual_audit 物件。"
+                )
+                + "\n"
                 + _visual_audit_prompt(design_spec)
-                + "\n最外層格式為："
-                '{"message":"...","suggestions":["..."],'
+                + (
+                    "\nUse this outer structure:"
+                    if language == 'en'
+                    else "\n最外層格式為："
+                )
+                + '{"message":"...","suggestions":["..."],'
                 '"visual_audit":{"score":80,"summary":"...",'
                 '"checks":[...]}}'
             )
@@ -1003,25 +1111,52 @@ def _generate_copilot_greeting(
         return fallback
 
 
-def _decide_copilot_response(history, latest_image_bytes, mime_type, user_message):
+def _decide_copilot_response(
+    history,
+    latest_image_bytes,
+    mime_type,
+    user_message,
+    language='zh-TW',
+):
     """Ask 小綠 to classify intent and produce a chat reply + refine prompt."""
+    language = normalize_language(language)
     fallback = {
         'intent': 'chat',
-        'message': '嗯！我有聽到 🌱 但我剛剛卡住了，可以再說一次你想調整的地方嗎？',
+        'message': (
+            'I hear you 🌱 I got a little stuck—could you tell me once more what you would like to change?'
+            if language == 'en'
+            else '嗯！我有聽到 🌱 但我剛剛卡住了，可以再說一次你想調整的地方嗎？'
+        ),
         'refine_prompt': '',
-        'suggestions': ['再多一些綠化', '加長椅與休憩區', '換個天氣']
+        'suggestions': (
+            ['Add more greenery', 'Add seating', 'Change the weather']
+            if language == 'en'
+            else ['再多一些綠化', '加長椅與休憩區', '換個天氣']
+        ),
     }
     if not client:
         return fallback
     try:
-        history_text = "\n".join(
-            f"{'使用者' if h['role'] == 'user' else '小綠'}：{h['message']}"
-            for h in history[-8:]  # keep last 8 turns
-        ) or "(尚無歷史)"
-        prompt_text = (
-            CHAT_SYSTEM_PROMPT
-            + f"\n\n=== 對話歷史 ===\n{history_text}\n\n=== 使用者最新訊息 ===\n{user_message}"
-        )
+        if language == 'en':
+            history_text = "\n".join(
+                f"{'User' if h['role'] == 'user' else 'Greenie'}: {h['message']}"
+                for h in history[-8:]
+            ) or "(No previous conversation)"
+            prompt_text = (
+                EN_CHAT_SYSTEM_PROMPT
+                + f"\n\n=== CONVERSATION ===\n{history_text}"
+                f"\n\n=== LATEST USER MESSAGE ===\n{user_message}"
+            )
+        else:
+            history_text = "\n".join(
+                f"{'使用者' if h['role'] == 'user' else '小綠'}：{h['message']}"
+                for h in history[-8:]
+            ) or "(尚無歷史)"
+            prompt_text = (
+                CHAT_SYSTEM_PROMPT
+                + f"\n\n=== 對話歷史 ===\n{history_text}"
+                f"\n\n=== 使用者最新訊息 ===\n{user_message}"
+            )
         small_bytes, small_mime = _shrink_for_llm(latest_image_bytes)
         parts = [
             types.Part.from_text(text=prompt_text),
@@ -1106,6 +1241,7 @@ def _serialize_session(session):
         'versions': versions,
         'history': history,
         'initial_prompt': str(session.get('initial_prompt') or ''),
+        'language': normalize_language(session.get('language')),
         'design_spec': session.get('design_spec')
         if isinstance(session.get('design_spec'), dict)
         else {},
@@ -1174,6 +1310,7 @@ def _deserialize_session(raw):
         'versions': versions,
         'history': history,
         'initial_prompt': str(payload.get('initial_prompt') or ''),
+        'language': normalize_language(payload.get('language')),
         'design_spec': design_spec,
         'audit': audit,
         'resolution': str(payload.get('resolution') or '2K'),
@@ -1390,10 +1527,73 @@ def _refresh_persisted_session(session_id, fallback_session):
     return persisted_session
 
 
+EN_API_ERRORS = {
+    'design_plan_invalid': 'The design-plan request must be a JSON object.',
+    'prompt_required': 'Describe the street transformation you would like to create.',
+    'prompt_too_long': f'The transformation description cannot exceed {MAX_PROMPT_CHARS} characters.',
+    'preset_invalid': 'This quick transformation option is not supported.',
+    'knowledge_runtime_unavailable': 'The street-design knowledge runtime is temporarily unavailable.',
+    'image_required': 'Upload a street image first.',
+    'image_invalid': 'The uploaded image is invalid. Use a valid JPEG, PNG, or WebP image.',
+    'provider_invalid': 'This image-generation provider is not supported.',
+    'provider_unavailable': 'The selected image provider is not configured on the server.',
+    'design_preferences_invalid': 'The street-context settings are invalid. Review the design plan and try again.',
+    'mask_invalid': 'The edit-area mask is invalid. Use a same-size PNG with transparent edit areas.',
+    'generation_busy': 'Another image is being generated. Please try again when it is complete.',
+    'empty_image_response': 'The image service did not return an image. Please try again.',
+    'generation_failed': 'Image generation failed. Please try again shortly.',
+    'generation_timeout': 'Image generation timed out. Try again or choose a lower resolution.',
+    'provider_rate_limited': 'The image service is busy or out of quota. Please try again later.',
+    'copilot_unavailable': 'Greenie requires a configured Google API key.',
+    'json_invalid': 'The request body must be a JSON object.',
+    'chat_fields_required': 'session_id and message are required.',
+    'session_id_invalid': 'The session_id format is invalid.',
+    'message_too_long': f'The message cannot exceed {MAX_CHAT_CHARS} characters.',
+    'session_expired': 'This co-design session does not exist or has expired. Generate a new image to continue.',
+    'session_busy': 'This co-design session is still processing the previous request.',
+    'refinement_failed': 'The image refinement failed. Please try again shortly.',
+    'rate_limited': 'Too many requests. Please wait before trying again.',
+    'not_found': 'This API route was not found.',
+    'method_not_allowed': 'This request method is not supported.',
+    'payload_too_large': 'The upload is too large. Reduce the image size and try again.',
+    'internal_error': 'The server encountered an unexpected error. Please try again later.',
+    'openai_timeout': 'OpenAI image generation timed out. Try 1K or 2K and retry.',
+    'openai_auth_failed': 'The OpenAI API key is invalid or revoked. Update it on the server.',
+    'openai_access_denied': 'This OpenAI project cannot currently use GPT Image. Check model access and organization verification.',
+    'openai_rate_limited': 'The OpenAI image quota is exhausted or busy. Check usage and try again later.',
+    'openai_moderation_blocked': 'The image or description did not pass the OpenAI safety check. Revise it and try again.',
+    'openai_request_invalid': 'OpenAI could not process these image settings. Try 2K or adjust the image.',
+    'openai_upstream_error': 'The OpenAI image service is temporarily unavailable.',
+}
+
+
+def _request_language():
+    header = request.headers.get('X-UI-Language', '')
+    if header:
+        return normalize_language(header)
+    try:
+        form_language = request.form.get('ui_language', '')
+        if form_language:
+            return normalize_language(form_language)
+    except HTTPException:
+        pass
+    try:
+        payload = request.get_json(silent=True)
+    except HTTPException:
+        payload = None
+    if isinstance(payload, dict):
+        return normalize_language(payload.get('language'))
+    return 'zh-TW'
+
+
 def _api_error(message, status, code, retry_after=None):
+    language = _request_language()
+    if language == 'en':
+        message = EN_API_ERRORS.get(code, message)
     payload = {
         'error': message,
         'code': code,
+        'language': language,
         'request_id': getattr(g, 'request_id', None),
     }
     response = jsonify(payload)
@@ -1570,6 +1770,7 @@ def create_design_plan():
         )
     custom_prompt = str(payload.get('custom_prompt') or '').strip()
     preset_id = str(payload.get('preset_id') or '').strip()
+    language = normalize_language(payload.get('language'))
     if not custom_prompt:
         return _api_error(
             '請描述你想進行的街道改造。',
@@ -1593,6 +1794,7 @@ def create_design_plan():
             custom_prompt,
             preset_id,
             _preferences_from_payload(payload),
+            language=language,
         )
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(
@@ -1792,6 +1994,7 @@ def transform_image():
     preset_id = (request.form.get('preset_id') or '').strip()
     resolution = request.form.get('resolution', '2K')
     provider = (request.form.get('provider') or 'gemini').strip().lower()
+    language = normalize_language(request.form.get('ui_language'))
     raw_preferences = request.form.get('design_preferences') or '{}'
     if not custom_prompt:
         return _api_error(
@@ -1867,6 +2070,7 @@ def transform_image():
             custom_prompt,
             preset_id,
             design_preferences,
+            language=language,
         )
         full_prompt = compile_generation_prompt(design_spec)
     except (OSError, ValueError, json.JSONDecodeError) as e:
@@ -1955,6 +2159,7 @@ The result should look like the same street, same buildings, same view - just wi
                 'versions': [version_meta],
                 'history': [],
                 'initial_prompt': custom_prompt or '',
+                'language': language,
                 'design_spec': public_design_spec(design_spec),
                 'audit': _pending_visual_audit(design_spec),
                 'resolution': resolution,
@@ -1997,6 +2202,7 @@ The result should look like the same street, same buildings, same view - just wi
             'version': 1,
             'image_url': generated_url,
             'provider': provider,
+            'language': language,
             'mask_applied': bool(mask_bytes),
             'design_spec': public_design_spec(design_spec),
             'audit': greeting.get(
@@ -2096,6 +2302,11 @@ def chat_with_copilot():
             404,
             'session_expired',
         )
+    requested_language = (
+        normalize_language(data.get('language'))
+        if data.get('language')
+        else None
+    )
 
     operation_handle = _acquire_session_operation(session_id, session)
     if not operation_handle:
@@ -2107,6 +2318,8 @@ def chat_with_copilot():
         )
     try:
         session = _refresh_persisted_session(session_id, session)
+        if requested_language:
+            session['language'] = requested_language
         return _chat_with_session(session_id, session, user_message)
     finally:
         _persist_session(session_id, session)
@@ -2115,6 +2328,7 @@ def chat_with_copilot():
 
 def _chat_with_session(session_id, session, user_message):
     global GEN_LOCK_HELD
+    language = normalize_language(session.get('language'))
     latest = session['versions'][-1]
     latest_bytes = latest['bytes']
     mime_type = latest.get('mime_type', 'image/png')
@@ -2124,11 +2338,18 @@ def _chat_with_session(session_id, session, user_message):
         _append_history_locked(session, 'user', user_message)
         history_snapshot = list(session['history'])
 
-    decision = _decide_copilot_response(history_snapshot, latest_bytes, mime_type, user_message)
+    decision = _decide_copilot_response(
+        history_snapshot,
+        latest_bytes,
+        mime_type,
+        user_message,
+        language,
+    )
 
     result = {
         'status': 'success',
         'session_id': session_id,
+        'language': language,
         'intent': decision['intent'],
         'message': decision['message'],
         'suggestions': decision['suggestions'],
@@ -2141,7 +2362,13 @@ def _chat_with_session(session_id, session, user_message):
         current_spec = session.get('design_spec')
         if not isinstance(current_spec, dict) or not current_spec:
             current_spec = build_design_spec(
-                session.get('initial_prompt') or '改善街道人本環境',
+                session.get('initial_prompt')
+                or (
+                    'Improve the people-first street environment'
+                    if language == 'en'
+                    else '改善街道人本環境'
+                ),
+                language=language,
             )
         updated_spec = refine_design_spec(current_spec, refine_prompt)
         full_prompt = compile_generation_prompt(
