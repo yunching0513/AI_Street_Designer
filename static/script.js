@@ -99,7 +99,20 @@ const UI_TEXT = {
         firstPerson: '第一人稱漫遊',
         safetyNote: '畫面不會出現使用者本人，降低人臉造成的生成失敗。',
         later: '稍後再說',
-        confirmVideo: '確認影片設定',
+        confirmVideo: '開始生成影片',
+        videoStarting: '正在建立街道漫遊',
+        videoStartingMessage: '正在把 v{version} 送給 Google Veo…',
+        videoQueued: '街道漫遊已排入生成',
+        videoQueuedMessage: 'Google Veo 正在處理，通常需要幾分鐘；可以留在這個畫面等候。',
+        videoGenerating: '正在走進你的新街道',
+        videoGeneratingMessage: 'Veo 正在維持建築與道路配置，同時生成向前步行的鏡頭。',
+        videoComplete: '街道漫遊完成',
+        videoCompleteMessage: '可以播放、下載，或重新設定另一個步行節奏。',
+        videoFailed: '影片生成沒有完成',
+        videoFailedMessage: '請稍後重試；若持續失敗，請確認 Google API 的付費額度與 Veo 權限。',
+        retryVideo: '重新設定',
+        downloadVideo: '下載影片',
+        videoProgressAria: '影片生成進度',
         evidenceCount: '{count} 項依據',
         targetSpeedSummary: '目標速度：{value}',
         prioritySummary: '優先：{value}',
@@ -235,7 +248,20 @@ const UI_TEXT = {
         firstPerson: 'First-person walk-through',
         safetyNote: 'The user does not appear on screen, reducing face-related generation failures.',
         later: 'Maybe later',
-        confirmVideo: 'Confirm video settings',
+        confirmVideo: 'Generate video',
+        videoStarting: 'Starting your street walk-through',
+        videoStartingMessage: 'Sending v{version} to Google Veo…',
+        videoQueued: 'Street walk-through queued',
+        videoQueuedMessage: 'Google Veo is working. This usually takes a few minutes; you can keep this screen open.',
+        videoGenerating: 'Walking into your redesigned street',
+        videoGeneratingMessage: 'Veo is preserving the street layout while creating a forward pedestrian camera move.',
+        videoComplete: 'Street walk-through complete',
+        videoCompleteMessage: 'Play or download it, or create another pace.',
+        videoFailed: 'Video generation did not finish',
+        videoFailedMessage: 'Try again shortly. If it keeps failing, check Google API billing and Veo access.',
+        retryVideo: 'Change settings',
+        downloadVideo: 'Download video',
+        videoProgressAria: 'Video generation progress',
         evidenceCount: '{count} sources',
         targetSpeedSummary: 'Target speed: {value}',
         prioritySummary: 'Priorities: {value}',
@@ -427,6 +453,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const videoSetupForm = document.getElementById('video-setup-form');
     const videoModalClose = document.getElementById('video-modal-close');
     const videoCancel = document.getElementById('video-cancel');
+    const videoStatusCard = document.getElementById('video-status-card');
+    const videoStatusIcon = document.getElementById('video-status-icon');
+    const videoStatusTitle = document.getElementById('video-status-title');
+    const videoStatusMessage = document.getElementById('video-status-message');
+    const videoProgress = document.getElementById('video-progress');
+    const videoPlayer = document.getElementById('video-player');
+    const videoStatusActions = document.getElementById('video-status-actions');
+    const videoDownload = document.getElementById('video-download');
+    const videoRetry = document.getElementById('video-retry');
     const auditScore = document.getElementById('audit-score');
     const auditSummary = document.getElementById('audit-summary');
     const resultAuditChecks = document.getElementById('result-audit-checks');
@@ -450,6 +485,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let activeMaskStroke = null;
     const videoDrafts = new Map();
     let videoReturnFocus = null;
+    let activeVideoJob = null;
+    let videoPollTimer = null;
+    let videoBusy = false;
+    let videoPollFailures = 0;
 
     function applyLanguage() {
         document.documentElement.lang = currentLanguage === 'en'
@@ -501,6 +540,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         setComparisonPosition(comparisonRange.value);
         updateVideoLauncher();
+        if (activeVideoJob) renderVideoStatus(activeVideoJob);
         if (activeDesignPlan) renderDesignPlan(activeDesignPlan, false);
         if (currentDesignSpec || currentAudit) {
             renderResultReview(currentDesignSpec, currentAudit);
@@ -1136,7 +1176,7 @@ document.addEventListener('DOMContentLoaded', () => {
         resultSection.classList.add('hidden');
     });
 
-    // ===== Walk-through video setup (phase 1: interface + saved draft) =====
+    // ===== Google Veo walk-through video =====
     videoLauncher.addEventListener('click', () => {
         if (videoLauncher.disabled || !versions[currentVersion]) return;
         const version = versions[currentVersion].version;
@@ -1163,19 +1203,162 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    videoSetupForm.addEventListener('submit', (event) => {
+    videoSetupForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         const activeVersion = versions[currentVersion];
-        if (!activeVersion) return;
+        if (!activeVersion || !sessionId || videoBusy) return;
         const formData = new FormData(videoSetupForm);
-        videoDrafts.set(activeVersion.version, {
+        const draft = {
             speed: formData.get('video-speed'),
             duration: formData.get('video-duration'),
             format: formData.get('video-format'),
-        });
+        };
+        videoDrafts.set(activeVersion.version, draft);
+        videoBusy = true;
+        videoPollFailures = 0;
+        activeVideoJob = {
+            status: 'starting',
+            version: activeVersion.version,
+            ...draft,
+        };
+        clearTimeout(videoPollTimer);
+        renderVideoStatus(activeVideoJob);
         updateVideoLauncher();
         closeVideoSetup();
+
+        try {
+            const response = await fetch('/api/videos', {
+                method: 'POST',
+                headers: languageHeaders({
+                    'Content-Type': 'application/json',
+                }),
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    version: activeVersion.version,
+                    language: currentLanguage,
+                    ...draft,
+                }),
+            });
+            const data = await readApiJson(response);
+            if (!response.ok || !data.job_id) {
+                throw new Error(data.error || tr('videoFailedMessage'));
+            }
+            activeVideoJob = data;
+            renderVideoStatus(activeVideoJob);
+            scheduleVideoPoll(8000);
+        } catch (error) {
+            console.error('Video creation error:', error);
+            activeVideoJob = {
+                ...activeVideoJob,
+                status: 'failed',
+                error: error.message,
+            };
+            videoBusy = false;
+            renderVideoStatus(activeVideoJob);
+            updateVideoLauncher();
+        }
     });
+
+    videoRetry.addEventListener('click', () => {
+        if (!versions[currentVersion]) return;
+        videoLauncher.click();
+    });
+
+    function scheduleVideoPoll(delay = 12000) {
+        clearTimeout(videoPollTimer);
+        videoPollTimer = setTimeout(pollVideoStatus, delay);
+    }
+
+    async function pollVideoStatus() {
+        if (!activeVideoJob?.job_id || !sessionId) return;
+        try {
+            const params = new URLSearchParams({
+                session_id: sessionId,
+                language: currentLanguage,
+            });
+            const response = await fetch(
+                `/api/videos/${activeVideoJob.job_id}?${params}`,
+                { headers: languageHeaders() }
+            );
+            const data = await readApiJson(response);
+            if (!response.ok) {
+                if ([409, 502, 503].includes(response.status)) {
+                    videoPollFailures += 1;
+                    if (videoPollFailures <= 5) {
+                        scheduleVideoPoll(
+                            Number(response.headers.get('Retry-After') || 10)
+                            * 1000
+                        );
+                        return;
+                    }
+                }
+                throw new Error(data.error || tr('videoFailedMessage'));
+            }
+            videoPollFailures = 0;
+            activeVideoJob = data;
+            renderVideoStatus(activeVideoJob);
+            if (['queued', 'in_progress'].includes(data.status)) {
+                scheduleVideoPoll();
+                return;
+            }
+            videoBusy = false;
+            updateVideoLauncher();
+        } catch (error) {
+            console.error('Video status error:', error);
+            activeVideoJob = {
+                ...activeVideoJob,
+                status: 'failed',
+                error: error.message,
+            };
+            videoBusy = false;
+            renderVideoStatus(activeVideoJob);
+            updateVideoLauncher();
+        }
+    }
+
+    function renderVideoStatus(job) {
+        if (!job) {
+            videoStatusCard.classList.add('hidden');
+            resultSection.classList.remove('has-video-status');
+            return;
+        }
+        resultSection.classList.add('has-video-status');
+        const status = job.status || 'starting';
+        const content = {
+            starting: ['⏳', 'videoStarting', 'videoStartingMessage'],
+            queued: ['🎞️', 'videoQueued', 'videoQueuedMessage'],
+            in_progress: ['✨', 'videoGenerating', 'videoGeneratingMessage'],
+            completed: ['✓', 'videoComplete', 'videoCompleteMessage'],
+            failed: ['!', 'videoFailed', 'videoFailedMessage'],
+        }[status] || ['🎞️', 'videoQueued', 'videoQueuedMessage'];
+
+        videoStatusCard.classList.remove('hidden', 'is-complete', 'is-failed');
+        videoStatusCard.classList.toggle('is-complete', status === 'completed');
+        videoStatusCard.classList.toggle('is-failed', status === 'failed');
+        videoStatusIcon.textContent = content[0];
+        videoStatusTitle.textContent = tr(content[1]);
+        videoStatusMessage.textContent = job.error || tr(content[2], {
+            version: job.version,
+        });
+        videoProgress.setAttribute('aria-label', tr('videoProgressAria'));
+        videoProgress.classList.toggle(
+            'hidden',
+            ['completed', 'failed'].includes(status)
+        );
+        videoPlayer.classList.toggle('hidden', status !== 'completed');
+        videoStatusActions.classList.toggle(
+            'hidden',
+            !['completed', 'failed'].includes(status)
+        );
+        videoDownload.classList.toggle('hidden', status !== 'completed');
+        if (status === 'completed' && job.video_url) {
+            if (videoPlayer.src !== new URL(job.video_url, location.href).href) {
+                videoPlayer.src = job.video_url;
+            }
+            videoDownload.href = job.video_url;
+            videoDownload.download = `street-walkthrough-v${job.version}.mp4`;
+        }
+    }
 
     function setCheckedVideoOption(name, value) {
         const input = videoSetupForm.querySelector(
@@ -1196,7 +1379,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateVideoLauncher() {
         const activeVersion = versions[currentVersion];
-        videoLauncher.disabled = generationBusy || !activeVersion;
+        videoLauncher.disabled = generationBusy || videoBusy || !activeVersion;
         if (!activeVersion) {
             videoLauncherTitle.textContent = tr('videoTitle');
             videoLauncherSummary.textContent = tr('videoSummary');

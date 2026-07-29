@@ -287,6 +287,23 @@
                         </span>
                         <span class="video-launcher-arrow" aria-hidden="true">→</span>
                     </button>
+                    <section class="video-status-card hidden" id="video-status-card" aria-live="polite">
+                        <div class="video-status-heading">
+                            <span class="video-status-icon" id="video-status-icon" aria-hidden="true">🎞️</span>
+                            <div>
+                                <strong id="video-status-title">正在準備街道漫遊</strong>
+                                <p id="video-status-message">Google Veo 已收到任務，完成後會顯示在這裡。</p>
+                            </div>
+                        </div>
+                        <div class="video-progress" id="video-progress" role="progressbar" aria-label="影片生成進度">
+                            <span></span>
+                        </div>
+                        <video class="video-player hidden" id="video-player" controls playsinline preload="metadata"></video>
+                        <div class="video-status-actions hidden" id="video-status-actions">
+                            <a class="video-download-button" id="video-download" href="#" download data-i18n="downloadVideo">下載影片</a>
+                            <button class="video-retry-button" id="video-retry" type="button" data-i18n="retryVideo">重新設定</button>
+                        </div>
+                    </section>
                 </div>
 
                 <!-- Right: co-pilot chat -->
@@ -365,9 +382,9 @@
                             <fieldset class="video-option-group">
                                 <legend data-i18n="duration">影片長度</legend>
                                 <div class="video-segmented">
+                                    <label><input type="radio" name="video-duration" value="4"><span data-i18n="seconds" data-i18n-value="4">4 秒</span></label>
+                                    <label><input type="radio" name="video-duration" value="6"><span data-i18n="seconds" data-i18n-value="6">6 秒</span></label>
                                     <label><input type="radio" name="video-duration" value="8" checked><span data-i18n="seconds" data-i18n-value="8">8 秒</span></label>
-                                    <label><input type="radio" name="video-duration" value="16"><span data-i18n="seconds" data-i18n-value="16">16 秒</span></label>
-                                    <label><input type="radio" name="video-duration" value="20"><span data-i18n="seconds" data-i18n-value="20">20 秒</span></label>
                                 </div>
                             </fieldset>
 
@@ -388,7 +405,7 @@
                         <div class="video-form-actions">
                             <button class="video-cancel-button" id="video-cancel" type="button" data-i18n="later">稍後再說</button>
                             <button class="video-confirm-button" type="submit">
-                                <span data-i18n="confirmVideo">確認影片設定</span>
+                                <span data-i18n="confirmVideo">開始生成影片</span>
                                 <span aria-hidden="true">🎬</span>
                             </button>
                         </div>

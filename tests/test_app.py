@@ -64,6 +64,12 @@ def test_index_renders_both_provider_choices(monkeypatch):
     assert b'name="video-speed"' in response.data
     assert b'name="video-duration"' in response.data
     assert b'name="video-format"' in response.data
+    assert b'id="video-status-card"' in response.data
+    assert b'name="video-duration" value="4"' in response.data
+    assert b'name="video-duration" value="6"' in response.data
+    assert b'name="video-duration" value="8"' in response.data
+    assert b'name="video-duration" value="16"' not in response.data
+    assert b'name="video-duration" value="20"' not in response.data
     assert b'id="street-context"' in response.data
     assert b'id="design-plan-panel"' in response.data
     assert b'id="edit-mask-canvas"' in response.data
@@ -72,7 +78,7 @@ def test_index_renders_both_provider_choices(monkeypatch):
     assert b'data-language="zh-TW"' in response.data
     assert b'data-language="en"' in response.data
     assert b'data-i18n="loadingAccess"' in response.data
-    assert '確認影片設定'.encode() in response.data
+    assert '開始生成影片'.encode() in response.data
     assert response.headers['Cache-Control'] == 'no-store'
 
 
@@ -686,6 +692,178 @@ def test_session_serialization_round_trip_uses_json_and_recreates_lock():
     assert restored['design_spec'] == session['design_spec']
     assert restored['audit'] == session['audit']
     assert isinstance(restored['_operation_lock'], type(threading.Lock()))
+
+
+def make_video_session(session_id='abcdef123456', version=3):
+    now = time.time()
+    street_app.SESSIONS[session_id] = {
+        'versions': [{
+            'version': version,
+            'url': f'/generated/v{version}.png',
+            'bytes': make_png(),
+            'mime_type': 'image/png',
+        }],
+        'history': [],
+        'video_jobs': {},
+        'initial_prompt': '人本街道',
+        'language': 'zh-TW',
+        'version_count': version,
+        'created_at': now,
+        'updated_at': now,
+        '_operation_lock': threading.Lock(),
+    }
+    return session_id
+
+
+def test_create_video_starts_veo_operation(monkeypatch):
+    session_id = make_video_session()
+    calls = {}
+
+    class FakeModels:
+        def generate_videos(self, **kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(name='operations/veo-test')
+
+    fake_client = SimpleNamespace(models=FakeModels())
+    monkeypatch.setattr(street_app, 'client', fake_client)
+
+    response = street_app.app.test_client().post('/api/videos', json={
+        'session_id': session_id,
+        'version': 3,
+        'speed': 'natural',
+        'duration': 8,
+        'format': 'portrait',
+        'language': 'zh-TW',
+    })
+
+    assert response.status_code == 202
+    payload = response.get_json()
+    assert payload['status'] == 'queued'
+    assert payload['aspect_ratio'] == '9:16'
+    assert calls['model'] == street_app.VEO_VIDEO_MODEL
+    assert calls['config'].duration_seconds == 8
+    assert calls['config'].resolution == '720p'
+    assert calls['config'].generate_audio is True
+    assert calls['image'].mime_type == 'image/png'
+    job = street_app.SESSIONS[session_id]['video_jobs'][payload['job_id']]
+    assert job['operation_name'] == 'operations/veo-test'
+
+
+def test_create_video_rejects_unsupported_duration(monkeypatch):
+    session_id = make_video_session()
+    monkeypatch.setattr(
+        street_app,
+        'client',
+        SimpleNamespace(models=SimpleNamespace(generate_videos=lambda: None)),
+    )
+
+    response = street_app.app.test_client().post('/api/videos', json={
+        'session_id': session_id,
+        'version': 3,
+        'speed': 'natural',
+        'duration': 20,
+        'format': 'landscape',
+    })
+
+    assert response.status_code == 400
+    assert response.get_json()['code'] == 'video_settings_invalid'
+
+
+def test_video_poll_progress_then_saves_completed_mp4(monkeypatch):
+    session_id = make_video_session()
+    job_id = '1234567890abcdef'
+    session = street_app.SESSIONS[session_id]
+    session['video_jobs'][job_id] = {
+        'id': job_id,
+        'operation_name': 'operations/veo-test',
+        'status': 'queued',
+        'version': 3,
+        'speed': 'natural',
+        'duration': 8,
+        'format': 'landscape',
+        'aspect_ratio': '16:9',
+        'video_url': '',
+        'error': '',
+        'created_at': time.time(),
+        'updated_at': time.time(),
+    }
+    operation_results = [
+        SimpleNamespace(done=False, error=None, response=None),
+        SimpleNamespace(
+            done=True,
+            error=None,
+            response=SimpleNamespace(generated_videos=[
+                SimpleNamespace(video='veo-file'),
+            ]),
+        ),
+    ]
+
+    class FakeOperations:
+        def get(self, operation):
+            assert operation.name == 'operations/veo-test'
+            return operation_results.pop(0)
+
+    class FakeFiles:
+        def download(self, file):
+            assert file == 'veo-file'
+            return b'fake-mp4'
+
+    monkeypatch.setattr(
+        street_app,
+        'client',
+        SimpleNamespace(
+            operations=FakeOperations(),
+            files=FakeFiles(),
+        ),
+    )
+    monkeypatch.setattr(
+        street_app,
+        '_save_generated_video',
+        lambda session_id, job_id, video_bytes: '/generated/walk.mp4',
+    )
+    client = street_app.app.test_client()
+
+    progress = client.get(
+        f'/api/videos/{job_id}?session_id={session_id}',
+    )
+    completed = client.get(
+        f'/api/videos/{job_id}?session_id={session_id}',
+    )
+
+    assert progress.status_code == 200
+    assert progress.get_json()['status'] == 'in_progress'
+    assert completed.status_code == 200
+    assert completed.get_json()['status'] == 'completed'
+    assert completed.get_json()['video_url'] == '/generated/walk.mp4'
+
+
+def test_session_serialization_preserves_video_jobs():
+    session_id = make_video_session()
+    job_id = '1234567890abcdef'
+    street_app.SESSIONS[session_id]['video_jobs'][job_id] = {
+        'id': job_id,
+        'operation_name': 'operations/veo-test',
+        'status': 'in_progress',
+        'version': 3,
+        'speed': 'natural',
+        'duration': 8,
+        'format': 'landscape',
+        'aspect_ratio': '16:9',
+        'video_url': '',
+        'error': '',
+        'created_at': 100.0,
+        'updated_at': 200.0,
+    }
+
+    restored = street_app._deserialize_session(
+        street_app._serialize_session(street_app.SESSIONS[session_id])
+    )
+
+    assert restored['video_jobs'][job_id]['status'] == 'in_progress'
+    assert restored['video_jobs'][job_id]['operation_name'] == (
+        'operations/veo-test'
+    )
+    assert restored['versions'][0]['version'] == 3
 
 
 def test_get_session_loads_redis_state_into_local_cache(monkeypatch):

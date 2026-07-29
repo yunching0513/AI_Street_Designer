@@ -21,7 +21,7 @@ import uuid
 
 # Bumped by hand on each deploy-worthy change — /api/diag reports it, so we
 # can tell at a glance whether the running instance actually has a fix.
-CODE_VERSION = '2026-07-29-bilingual1'
+CODE_VERSION = '2026-07-30-veo1'
 
 def rss_mb():
     """Resident memory of this worker, in MB (Linux)."""
@@ -107,6 +107,10 @@ STATE_KEY_PREFIX = os.getenv(
 
 GEMINI_IMAGE_MODEL = os.getenv('GEMINI_IMAGE_MODEL', 'gemini-3-pro-image')
 OPENAI_IMAGE_MODEL = os.getenv('OPENAI_IMAGE_MODEL', 'gpt-image-2')
+VEO_VIDEO_MODEL = os.getenv(
+    'VEO_VIDEO_MODEL',
+    'veo-3.1-generate-preview',
+)
 COPILOT_TEXT_MODELS = [
     model.strip()
     for model in os.getenv('GEMINI_TEXT_MODELS', 'gemini-flash-latest').split(',')
@@ -146,6 +150,8 @@ MAX_CHATS_PER_10_MINUTES = _env_int(
     'MAX_CHATS_PER_10_MINUTES', 60, 1, 1_000)
 MAX_STREET_FETCHES_PER_HOUR = _env_int(
     'MAX_STREET_FETCHES_PER_HOUR', 120, 1, 2_000)
+MAX_VIDEOS_PER_DAY = _env_int('MAX_VIDEOS_PER_DAY', 3, 1, 50)
+MAX_VIDEO_JOBS_PER_SESSION = 6
 
 client = None
 openai_client = None
@@ -835,11 +841,38 @@ def _save_generated_image(session_id, version, image_bytes):
     # instance and gets workers killed mid-request (bare 500/502s).
     small_bytes, small_mime = _shrink_for_llm(image_bytes)
     version_meta = {
+        'version': version,
         'url': image_url,
         'bytes': small_bytes,
         'mime_type': small_mime,
     }
     return image_url, version_meta
+
+
+def _save_generated_video(session_id, job_id, video_bytes):
+    """Persist a completed MP4 and return its public URL."""
+    filename = f'{job_id}.mp4'
+    if USE_BLOB:
+        blob_result = vercel_blob.put(
+            f'generated/{session_id}/videos/{filename}',
+            video_bytes,
+            {'access': 'public', 'addRandomSuffix': 'false'},
+        )
+        return blob_result['url']
+
+    video_dir = os.path.join(
+        app.config['GENERATED_FOLDER'],
+        session_id,
+        'videos',
+    )
+    os.makedirs(video_dir, exist_ok=True)
+    filepath = os.path.join(video_dir, filename)
+    with open(filepath, 'wb') as output:
+        output.write(video_bytes)
+    return url_for(
+        'static',
+        filename=f'generated/{session_id}/videos/{filename}',
+    )
 
 
 def _prune_generated_dirs(keep=40):
@@ -1222,6 +1255,7 @@ def _serialize_session(session):
         if not isinstance(image_bytes, bytes):
             continue
         versions.append({
+            'version': int(version.get('version') or 0),
             'url': str(version.get('url') or ''),
             'bytes_b64': base64.b64encode(image_bytes).decode('ascii'),
             'mime_type': str(
@@ -1237,9 +1271,34 @@ def _serialize_session(session):
         for turn in session.get('history', [])[-MAX_HISTORY_TURNS:]
         if isinstance(turn, dict)
     ]
+    video_jobs = []
+    for job in list(session.get('video_jobs', {}).values())[
+        -MAX_VIDEO_JOBS_PER_SESSION:
+    ]:
+        if not isinstance(job, dict):
+            continue
+        video_jobs.append({
+            key: job.get(key)
+            for key in (
+                'id',
+                'operation_name',
+                'status',
+                'version',
+                'speed',
+                'duration',
+                'format',
+                'aspect_ratio',
+                'video_url',
+                'error',
+                'created_at',
+                'updated_at',
+            )
+            if job.get(key) is not None
+        })
     payload = {
         'versions': versions,
         'history': history,
+        'video_jobs': video_jobs,
         'initial_prompt': str(session.get('initial_prompt') or ''),
         'language': normalize_language(session.get('language')),
         'design_spec': session.get('design_spec')
@@ -1284,6 +1343,7 @@ def _deserialize_session(raw):
         if mime_type not in ('image/jpeg', 'image/png', 'image/webp'):
             raise ValueError('invalid persisted image type')
         versions.append({
+            'version': int(version.get('version') or 0),
             'url': str(version.get('url') or ''),
             'bytes': image_bytes,
             'mime_type': mime_type,
@@ -1306,9 +1366,31 @@ def _deserialize_session(raw):
     audit = payload.get('audit')
     if not isinstance(audit, dict):
         audit = {}
+    video_jobs = {}
+    for job in payload.get('video_jobs', [])[-MAX_VIDEO_JOBS_PER_SESSION:]:
+        if not isinstance(job, dict):
+            continue
+        job_id = str(job.get('id') or '')
+        if not re.fullmatch(r'[a-f0-9]{16}', job_id):
+            continue
+        video_jobs[job_id] = {
+            'id': job_id,
+            'operation_name': str(job.get('operation_name') or ''),
+            'status': str(job.get('status') or 'queued'),
+            'version': int(job.get('version') or 1),
+            'speed': str(job.get('speed') or 'natural'),
+            'duration': int(job.get('duration') or 8),
+            'format': str(job.get('format') or 'landscape'),
+            'aspect_ratio': str(job.get('aspect_ratio') or '16:9'),
+            'video_url': str(job.get('video_url') or ''),
+            'error': str(job.get('error') or ''),
+            'created_at': float(job.get('created_at') or now),
+            'updated_at': float(job.get('updated_at') or now),
+        }
     return {
         'versions': versions,
         'history': history,
+        'video_jobs': video_jobs,
         'initial_prompt': str(payload.get('initial_prompt') or ''),
         'language': normalize_language(payload.get('language')),
         'design_spec': design_spec,
@@ -1564,6 +1646,14 @@ EN_API_ERRORS = {
     'openai_moderation_blocked': 'The image or description did not pass the OpenAI safety check. Revise it and try again.',
     'openai_request_invalid': 'OpenAI could not process these image settings. Try 2K or adjust the image.',
     'openai_upstream_error': 'The OpenAI image service is temporarily unavailable.',
+    'video_unavailable': 'Google Veo is not configured on the server.',
+    'video_payload_invalid': 'The video request must be a JSON object.',
+    'video_settings_invalid': 'Choose a supported duration, pace, and format.',
+    'video_version_invalid': 'This image version is no longer available. Select a recent version.',
+    'video_job_not_found': 'This video job does not exist or has expired.',
+    'video_generation_failed': 'Google Veo could not generate this video. Please try again later.',
+    'video_result_missing': 'Google Veo completed without returning a video.',
+    'video_storage_failed': 'The completed video could not be saved.',
 }
 
 
@@ -1571,6 +1661,9 @@ def _request_language():
     header = request.headers.get('X-UI-Language', '')
     if header:
         return normalize_language(header)
+    query_language = request.args.get('language', '')
+    if query_language:
+        return normalize_language(query_language)
     try:
         form_language = request.form.get('ui_language', '')
         if form_language:
@@ -1878,6 +1971,15 @@ def diag():
         'image_models': {
             'gemini': GEMINI_IMAGE_MODEL,
             'openai': OPENAI_IMAGE_MODEL,
+        },
+        'video': {
+            'available': bool(
+                client
+                and getattr(client.models, 'generate_videos', None)
+            ),
+            'model': VEO_VIDEO_MODEL,
+            'durations_seconds': [4, 6, 8],
+            'formats': ['16:9', '9:16'],
         },
         'session_ttl_seconds': SESSION_TTL_SECONDS,
         'text_models': {},
@@ -2453,6 +2555,306 @@ def _chat_with_session(session_id, session, user_message):
             )
 
     return jsonify(result)
+
+
+def _video_source_version(session, requested_version):
+    """Return retained image metadata for an absolute co-design version."""
+    versions = session.get('versions', [])
+    version_count = int(session.get('version_count') or len(versions))
+    first_retained = max(1, version_count - len(versions) + 1)
+    for offset, version in enumerate(versions):
+        absolute_version = int(
+            version.get('version') or first_retained + offset
+        )
+        if absolute_version == requested_version:
+            return version
+    return None
+
+
+def _video_prompt(speed):
+    pace = {
+        'gentle': (
+            'Move forward at a very slow, relaxed strolling pace with '
+            'subtle natural walking motion.'
+        ),
+        'natural': (
+            'Move forward at a natural pedestrian walking pace with smooth, '
+            'stable motion.'
+        ),
+        'brisk': (
+            'Move forward at a brisk walking pace while keeping the camera '
+            'stable and comfortable.'
+        ),
+    }[speed]
+    return (
+        'Create a photorealistic first-person pedestrian walk-through from '
+        'this redesigned street image. Keep an eye-level camera on the '
+        'sidewalk and travel naturally forward into the scene. '
+        f'{pace} Preserve the exact street design, building geometry, '
+        'storefronts, trees, lanes, street furniture, signs, lighting, and '
+        'perspective shown in the reference. Use continuous stabilized camera '
+        'movement, realistic parallax, and subtle urban ambience. No cuts, no '
+        'camera rotation, no dramatic zoom, no new design elements, no close-up '
+        'or identifiable people, no dialogue, and no music.'
+    )
+
+
+def _public_video_job(job):
+    payload = {
+        'job_id': job['id'],
+        'status': job['status'],
+        'version': job['version'],
+        'speed': job['speed'],
+        'duration': job['duration'],
+        'format': job['format'],
+        'aspect_ratio': job['aspect_ratio'],
+    }
+    if job.get('video_url'):
+        payload['video_url'] = job['video_url']
+    if job.get('error'):
+        payload['error'] = job['error']
+    return payload
+
+
+@app.route('/api/videos', methods=['POST'])
+def create_video():
+    """Start an asynchronous Google Veo image-to-video operation."""
+    rate_error = _check_rate_limit('video', MAX_VIDEOS_PER_DAY, 86_400)
+    if rate_error is not None:
+        return rate_error
+    if not client or not getattr(client.models, 'generate_videos', None):
+        return _api_error(
+            'Google Veo 尚未在伺服器設定完成。',
+            503,
+            'video_unavailable',
+        )
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _api_error(
+            '影片請求必須是 JSON 物件。',
+            400,
+            'video_payload_invalid',
+        )
+    session_id = str(data.get('session_id') or '').strip()
+    if not re.fullmatch(r'[a-f0-9]{12}', session_id):
+        return _api_error(
+            'session_id 格式無效。',
+            400,
+            'session_id_invalid',
+        )
+    try:
+        version = int(data.get('version'))
+        duration = int(data.get('duration'))
+    except (TypeError, ValueError):
+        return _api_error(
+            '請選擇支援的影片長度、步行節奏與畫面比例。',
+            400,
+            'video_settings_invalid',
+        )
+    speed = str(data.get('speed') or '')
+    video_format = str(data.get('format') or '')
+    if (
+        duration not in {4, 6, 8}
+        or speed not in {'gentle', 'natural', 'brisk'}
+        or video_format not in {'landscape', 'portrait'}
+    ):
+        return _api_error(
+            '請選擇支援的影片長度、步行節奏與畫面比例。',
+            400,
+            'video_settings_invalid',
+        )
+
+    session = _get_session(session_id)
+    if not session:
+        return _api_error(
+            '共創工作階段不存在或已逾時，請重新生成一張圖片。',
+            404,
+            'session_expired',
+        )
+    operation_handle = _acquire_session_operation(session_id, session)
+    if not operation_handle:
+        return _api_error(
+            '這個共創工作階段正在處理上一個要求，請稍候。',
+            409,
+            'session_busy',
+            retry_after=5,
+        )
+
+    try:
+        session = _refresh_persisted_session(session_id, session)
+        source = _video_source_version(session, version)
+        if not source:
+            return _api_error(
+                '這個圖片版本已不在工作階段中，請選擇較新的版本。',
+                404,
+                'video_version_invalid',
+            )
+        aspect_ratio = '9:16' if video_format == 'portrait' else '16:9'
+        operation = client.models.generate_videos(
+            model=VEO_VIDEO_MODEL,
+            prompt=_video_prompt(speed),
+            image=types.Image(
+                image_bytes=source['bytes'],
+                mime_type=source.get('mime_type', 'image/jpeg'),
+            ),
+            config=types.GenerateVideosConfig(
+                number_of_videos=1,
+                duration_seconds=duration,
+                aspect_ratio=aspect_ratio,
+                resolution='720p',
+                generate_audio=True,
+                person_generation='allow_adult',
+                enhance_prompt=True,
+                negative_prompt=(
+                    'warped buildings, morphing signs, jump cuts, camera shake, '
+                    'new vehicles, close-up faces, children, duplicated objects, '
+                    'text distortion'
+                ),
+            ),
+        )
+        operation_name = str(getattr(operation, 'name', '') or '')
+        if not operation_name:
+            raise RuntimeError('Veo did not return an operation name')
+        now = time.time()
+        job_id = uuid.uuid4().hex[:16]
+        job = {
+            'id': job_id,
+            'operation_name': operation_name,
+            'status': 'queued',
+            'version': version,
+            'speed': speed,
+            'duration': duration,
+            'format': video_format,
+            'aspect_ratio': aspect_ratio,
+            'video_url': '',
+            'error': '',
+            'created_at': now,
+            'updated_at': now,
+        }
+        jobs = session.setdefault('video_jobs', {})
+        jobs[job_id] = job
+        while len(jobs) > MAX_VIDEO_JOBS_PER_SESSION:
+            oldest_id = min(
+                jobs,
+                key=lambda item: jobs[item].get('created_at', 0),
+            )
+            jobs.pop(oldest_id, None)
+        session['updated_at'] = now
+        return jsonify(_public_video_job(job)), 202
+    except Exception as error:
+        print(
+            f'[{g.request_id}] Veo create failed: '
+            f'{error.__class__.__name__}: {error}'
+        )
+        return _api_error(
+            'Google Veo 無法建立影片，請確認付費額度與模型權限後再試。',
+            502,
+            'video_generation_failed',
+            retry_after=30,
+        )
+    finally:
+        _persist_session(session_id, session)
+        _release_session_operation(operation_handle)
+
+
+@app.route('/api/videos/<job_id>', methods=['GET'])
+def get_video(job_id):
+    """Poll Veo and persist the completed MP4 exactly once."""
+    session_id = str(request.args.get('session_id') or '').strip()
+    if (
+        not re.fullmatch(r'[a-f0-9]{12}', session_id)
+        or not re.fullmatch(r'[a-f0-9]{16}', job_id)
+    ):
+        return _api_error(
+            '影片工作階段格式無效。',
+            400,
+            'session_id_invalid',
+        )
+    session = _get_session(session_id)
+    if not session:
+        return _api_error(
+            '共創工作階段不存在或已逾時，請重新生成一張圖片。',
+            404,
+            'session_expired',
+        )
+    operation_handle = _acquire_session_operation(session_id, session)
+    if not operation_handle:
+        return _api_error(
+            '影片狀態正在更新，請稍候再查詢。',
+            409,
+            'session_busy',
+            retry_after=3,
+        )
+
+    try:
+        session = _refresh_persisted_session(session_id, session)
+        job = session.get('video_jobs', {}).get(job_id)
+        if not job:
+            return _api_error(
+                '找不到這個影片任務，可能已經逾時。',
+                404,
+                'video_job_not_found',
+            )
+        if job['status'] in {'completed', 'failed'}:
+            return jsonify(_public_video_job(job))
+
+        operation = client.operations.get(
+            types.GenerateVideosOperation(
+                name=job['operation_name'],
+            )
+        )
+        now = time.time()
+        job['updated_at'] = now
+        if not getattr(operation, 'done', False):
+            job['status'] = 'in_progress'
+            session['updated_at'] = now
+            return jsonify(_public_video_job(job))
+
+        operation_error = getattr(operation, 'error', None)
+        if operation_error:
+            job['status'] = 'failed'
+            job['error'] = (
+                'Google Veo 無法完成這支影片，請調整設定後再試。'
+            )
+            session['updated_at'] = now
+            print(f'[{g.request_id}] Veo operation failed: {operation_error}')
+            return jsonify(_public_video_job(job))
+
+        response = getattr(operation, 'response', None)
+        generated_videos = getattr(response, 'generated_videos', None) or []
+        if not generated_videos:
+            job['status'] = 'failed'
+            job['error'] = 'Google Veo 完成任務，但沒有回傳影片。'
+            session['updated_at'] = now
+            return jsonify(_public_video_job(job))
+
+        video_file = generated_videos[0].video
+        video_bytes = client.files.download(file=video_file)
+        if not video_bytes:
+            raise RuntimeError('Veo video download was empty')
+        job['video_url'] = _save_generated_video(
+            session_id,
+            job_id,
+            video_bytes,
+        )
+        job['status'] = 'completed'
+        session['updated_at'] = now
+        return jsonify(_public_video_job(job))
+    except Exception as error:
+        print(
+            f'[{g.request_id}] Veo poll failed: '
+            f'{error.__class__.__name__}: {error}'
+        )
+        return _api_error(
+            '影片狀態暫時無法更新，系統會保留任務，請稍後再試。',
+            502,
+            'video_generation_failed',
+            retry_after=10,
+        )
+    finally:
+        _persist_session(session_id, session)
+        _release_session_operation(operation_handle)
 
 if __name__ == '__main__':
     app.run(
