@@ -76,6 +76,27 @@ const UI_TEXT = {
         downloadCurrentImage: '下載目前生成圖',
         downloadPreparing: '正在準備下載…',
         downloadFailed: '圖片下載失敗，請稍後再試。',
+        galleryNav: '看看大家的街道成果',
+        publishGallery: '分享至街景成果牆',
+        publishGallerySub: '只會公開目前的生成圖，原始照片不公開',
+        publishedGallery: '這個版本已分享',
+        publishedGallerySub: '可以前往成果牆看看大家的回饋',
+        closeGalleryShare: '關閉分享設定',
+        galleryShareKicker: '分享你的街道想像',
+        galleryShareTitle: '把這個街道想像分享給大家',
+        galleryShareDescription: '其他人可以在成果牆看到這張生成圖，並按下「我喜歡這個街景設計！」給你回饋。',
+        gallerySharePreviewAlt: '準備公開的街景生成成果',
+        galleryCaptionLabel: '想說些什麼？（選填）',
+        galleryCaptionPlaceholder: '例如：希望上下學的孩子都能安心走路',
+        galleryConsentTitle: '我同意公開目前這張生成成果',
+        galleryConsentBody: '原始上傳照片、對話內容與個人資料都不會公開；請先確認生成圖中沒有不想分享的資訊。',
+        viewGallery: '前往成果牆看看 →',
+        galleryNotNow: '這次先不要',
+        confirmGalleryShare: '確認分享',
+        galleryPublishing: '正在把生成成果放上成果牆…',
+        galleryPublished: '分享完成！其他人現在可以看見並回饋這個設計。',
+        galleryAlreadyPublished: '這個版本已經在成果牆上了。',
+        galleryPublishFailed: '分享失敗：{message}',
         videoTitle: '滿意這一版？製作街道漫遊影片',
         videoSummary: '以第一人稱沿著新街道向前走',
         copilotName: '小綠',
@@ -247,6 +268,27 @@ const UI_TEXT = {
         downloadCurrentImage: 'Download current result',
         downloadPreparing: 'Preparing download…',
         downloadFailed: 'The image could not be downloaded. Please try again.',
+        galleryNav: 'Explore community designs',
+        publishGallery: 'Share to the community gallery',
+        publishGallerySub: 'Only this generated result will be public; the original stays private',
+        publishedGallery: 'This version is shared',
+        publishedGallerySub: 'Visit the gallery to see community feedback',
+        closeGalleryShare: 'Close sharing settings',
+        galleryShareKicker: 'SHARE YOUR STREET IDEA',
+        galleryShareTitle: 'Share this street idea with the community',
+        galleryShareDescription: 'Others can see this generated result in the gallery and choose “I like this street design!”',
+        gallerySharePreviewAlt: 'Generated street result ready to be shared',
+        galleryCaptionLabel: 'Add a note (optional)',
+        galleryCaptionPlaceholder: 'For example: a safer walk to school for every child',
+        galleryConsentTitle: 'I agree to publish this generated result',
+        galleryConsentBody: 'Your original photo, conversation, and personal information remain private. Check that the generated result contains nothing you prefer not to share.',
+        viewGallery: 'View the community gallery →',
+        galleryNotNow: 'Not this time',
+        confirmGalleryShare: 'Share design',
+        galleryPublishing: 'Adding this generated result to the gallery…',
+        galleryPublished: 'Shared! The community can now view and respond to this design.',
+        galleryAlreadyPublished: 'This version is already in the gallery.',
+        galleryPublishFailed: 'Sharing failed: {message}',
         videoTitle: 'Happy with this version? Create a street walk-through',
         videoSummary: 'Move forward along the redesigned street in first person',
         copilotName: 'Greenie',
@@ -487,6 +529,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const versionStrip = document.getElementById('version-strip');
     const downloadOriginalImage = document.getElementById('download-original-image');
     const downloadCurrentImage = document.getElementById('download-current-image');
+    const galleryPublishLauncher = document.getElementById('gallery-publish-launcher');
+    const galleryPublishTitle = galleryPublishLauncher.querySelector('strong');
+    const galleryPublishSummary = galleryPublishLauncher.querySelector('small');
+    const galleryShareModal = document.getElementById('gallery-share-modal');
+    const galleryShareForm = document.getElementById('gallery-share-form');
+    const galleryShareClose = document.getElementById('gallery-share-close');
+    const galleryShareCancel = document.getElementById('gallery-share-cancel');
+    const gallerySharePreview = document.getElementById('gallery-share-preview');
+    const galleryShareCaption = document.getElementById('gallery-share-caption');
+    const galleryCaptionCount = document.getElementById('gallery-caption-count');
+    const galleryShareConsent = document.getElementById('gallery-share-consent');
+    const galleryShareSubmit = document.getElementById('gallery-share-submit');
+    const galleryShareStatus = document.getElementById('gallery-share-status');
+    const galleryShareSuccessLink = document.getElementById('gallery-share-success-link');
     const copilotMessages = document.getElementById('copilot-messages');
     const copilotSuggestions = document.getElementById('copilot-suggestions');
     const copilotInputForm = document.getElementById('copilot-input-form');
@@ -547,6 +603,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let videoBusy = false;
     let videoPollFailures = 0;
     let selectedStoryboardVersions = [];
+    let galleryShareReturnFocus = null;
+    let galleryShareBusy = false;
+    const publishedGalleryVersions = new Set();
 
     function applyLanguage() {
         document.documentElement.lang = currentLanguage === 'en'
@@ -600,6 +659,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateVideoLauncher();
         renderVideoStoryboard();
         updateImageDownloadState();
+        updateGalleryPublishLauncher();
         if (activeVideoJob) renderVideoStatus(activeVideoJob);
         if (activeDesignPlan) renderDesignPlan(activeDesignPlan, false);
         if (currentDesignSpec || currentAudit) {
@@ -681,6 +741,25 @@ document.addEventListener('DOMContentLoaded', () => {
         downloadCurrentImage.disabled = !versions[currentVersion];
     }
 
+    function updateGalleryPublishLauncher() {
+        const activeVersion = versions[currentVersion];
+        const alreadyPublished = activeVersion
+            && publishedGalleryVersions.has(activeVersion.version);
+        galleryPublishLauncher.disabled = (
+            generationBusy
+            || galleryShareBusy
+            || !sessionId
+            || !activeVersion
+            || alreadyPublished
+        );
+        galleryPublishTitle.textContent = alreadyPublished
+            ? tr('publishedGallery')
+            : tr('publishGallery');
+        galleryPublishSummary.textContent = alreadyPublished
+            ? tr('publishedGallerySub')
+            : tr('publishGallerySub');
+    }
+
     downloadOriginalImage.addEventListener('click', () => {
         withDownloadState(downloadOriginalImage, async () => {
             const extension = selectedFile?.name?.includes('.')
@@ -709,6 +788,124 @@ document.addEventListener('DOMContentLoaded', () => {
                 `ai-street-design-v${activeVersion.version}.${extension}`
             );
         });
+    });
+
+    function closeGalleryShare() {
+        if (galleryShareModal.classList.contains('hidden')) return;
+        galleryShareModal.classList.add('hidden');
+        document.body.style.overflow = '';
+        if (
+            galleryShareReturnFocus
+            && document.contains(galleryShareReturnFocus)
+        ) {
+            galleryShareReturnFocus.focus();
+        }
+        galleryShareReturnFocus = null;
+    }
+
+    function openGalleryShare() {
+        const activeVersion = versions[currentVersion];
+        if (
+            !activeVersion
+            || !sessionId
+            || galleryPublishLauncher.disabled
+        ) {
+            return;
+        }
+        galleryShareReturnFocus = document.activeElement;
+        gallerySharePreview.src = activeVersion.image_url;
+        galleryShareCaption.value = '';
+        galleryCaptionCount.textContent = '0';
+        galleryShareConsent.checked = false;
+        galleryShareConsent.disabled = false;
+        galleryShareCaption.disabled = false;
+        galleryShareSubmit.disabled = false;
+        galleryShareStatus.textContent = '';
+        galleryShareStatus.className = 'gallery-share-status';
+        galleryShareSuccessLink.classList.add('hidden');
+        galleryShareModal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+        galleryShareClose.focus();
+    }
+
+    galleryPublishLauncher.addEventListener('click', openGalleryShare);
+    galleryShareClose.addEventListener('click', closeGalleryShare);
+    galleryShareCancel.addEventListener('click', closeGalleryShare);
+    galleryShareModal.addEventListener('click', event => {
+        if (event.target === galleryShareModal) closeGalleryShare();
+    });
+    galleryShareCaption.addEventListener('input', () => {
+        galleryCaptionCount.textContent = String(
+            galleryShareCaption.value.length
+        );
+    });
+    document.addEventListener('keydown', event => {
+        if (
+            event.key === 'Escape'
+            && !galleryShareModal.classList.contains('hidden')
+            && !galleryShareBusy
+        ) {
+            closeGalleryShare();
+        }
+    });
+
+    galleryShareForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        const activeVersion = versions[currentVersion];
+        if (
+            !activeVersion
+            || !sessionId
+            || galleryShareBusy
+            || !galleryShareConsent.checked
+        ) {
+            galleryShareConsent.reportValidity();
+            return;
+        }
+        galleryShareBusy = true;
+        galleryShareSubmit.disabled = true;
+        galleryShareStatus.className = 'gallery-share-status';
+        galleryShareStatus.textContent = tr('galleryPublishing');
+        updateGalleryPublishLauncher();
+        let shared = false;
+        try {
+            const response = await fetch('/api/gallery', {
+                method: 'POST',
+                headers: languageHeaders({
+                    'Content-Type': 'application/json',
+                }),
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    version: activeVersion.version,
+                    caption: galleryShareCaption.value.trim(),
+                    consent: true,
+                    language: currentLanguage,
+                }),
+            });
+            const data = await readApiJson(response);
+            if (!response.ok || !data.post) {
+                throw new Error(data.error || tr('unknownServerError'));
+            }
+            shared = true;
+            publishedGalleryVersions.add(activeVersion.version);
+            galleryShareStatus.className = 'gallery-share-status is-success';
+            galleryShareStatus.textContent = data.created
+                ? tr('galleryPublished')
+                : tr('galleryAlreadyPublished');
+            galleryShareSuccessLink.href = data.gallery_url || '/gallery';
+            galleryShareSuccessLink.classList.remove('hidden');
+            galleryShareConsent.disabled = true;
+            galleryShareCaption.disabled = true;
+        } catch (error) {
+            console.error('Gallery publishing error:', error);
+            galleryShareStatus.className = 'gallery-share-status is-error';
+            galleryShareStatus.textContent = tr('galleryPublishFailed', {
+                message: error.message,
+            });
+        } finally {
+            galleryShareBusy = false;
+            if (!shared) galleryShareSubmit.disabled = false;
+            updateGalleryPublishLauncher();
+        }
     });
 
     comparisonRange.addEventListener('input', (event) => {
@@ -1221,6 +1418,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             sessionId = data.session_id;
             versions = [];
+            publishedGalleryVersions.clear();
             selectedStoryboardVersions = [];
             videoDrafts.clear();
             activeVideoJob = null;
@@ -1841,6 +2039,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderVersionStrip();
         renderVideoStoryboard();
         updateImageDownloadState();
+        updateGalleryPublishLauncher();
     }
 
     function renderVersionStrip() {
@@ -1866,6 +2065,7 @@ document.addEventListener('DOMContentLoaded', () => {
         roundBadge.textContent = tr('round', { version: v.version });
         renderVersionStrip();
         updateImageDownloadState();
+        updateGalleryPublishLauncher();
         updateVideoLauncher();
     }
 
@@ -1879,10 +2079,12 @@ document.addEventListener('DOMContentLoaded', () => {
             loadingOverlay.classList.remove('hidden');
             resultImage.classList.add('hidden');
             videoLauncher.disabled = true;
+            galleryPublishLauncher.disabled = true;
         } else {
             loadingOverlay.classList.add('hidden');
             resultImage.classList.remove('hidden');
             updateVideoLauncher();
+            updateGalleryPublishLauncher();
         }
     }
 

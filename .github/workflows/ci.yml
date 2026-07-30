@@ -38,4 +38,6 @@ jobs:
         run: pip-audit -r requirements.txt
 
       - name: Check browser JavaScript syntax
-        run: node --check static/script.js
+        run: |
+          node --check static/script.js
+          node --check static/gallery.js

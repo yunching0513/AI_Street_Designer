@@ -23,7 +23,7 @@ import uuid
 
 # Bumped by hand on each deploy-worthy change — /api/diag reports it, so we
 # can tell at a glance whether the running instance actually has a fix.
-CODE_VERSION = '2026-07-30-storyboard1'
+CODE_VERSION = '2026-07-30-gallery1'
 
 def rss_mb():
     """Resident memory of this worker, in MB (Linux)."""
@@ -155,6 +155,9 @@ MAX_STREET_FETCHES_PER_HOUR = _env_int(
     'MAX_STREET_FETCHES_PER_HOUR', 120, 1, 2_000)
 MAX_VIDEOS_PER_DAY = _env_int('MAX_VIDEOS_PER_DAY', 3, 1, 50)
 MAX_VIDEO_JOBS_PER_SESSION = 6
+MAX_GALLERY_CAPTION_CHARS = 180
+MAX_GALLERY_POSTS = _env_int('MAX_GALLERY_POSTS', 500, 20, 5_000)
+MAX_GALLERY_PAGE_SIZE = 48
 
 client = None
 openai_client = None
@@ -402,6 +405,14 @@ RATE_LIMITS = {}
 RATE_LIMITS_LOCK = threading.Lock()
 SESSION_INDEX_KEY = f'{STATE_KEY_PREFIX}:sessions'
 SESSION_LOCK_SECONDS = 360
+GALLERY_INDEX_KEY = f'{STATE_KEY_PREFIX}:gallery:index'
+GALLERY_POST_KEY_PREFIX = f'{STATE_KEY_PREFIX}:gallery:post'
+GALLERY_SOURCE_KEY_PREFIX = f'{STATE_KEY_PREFIX}:gallery:source'
+GALLERY_LIKE_KEY_PREFIX = f'{STATE_KEY_PREFIX}:gallery:likes'
+GALLERY_POSTS = {}
+GALLERY_SOURCE_IDS = {}
+GALLERY_VOTES = {}
+GALLERY_LOCK = threading.Lock()
 
 RATE_LIMIT_SCRIPT = """
 local count = redis.call('INCR', KEYS[1])
@@ -1682,6 +1693,13 @@ EN_API_ERRORS = {
     'video_generation_failed': 'Google Veo could not generate this video. Please try again later.',
     'video_result_missing': 'Google Veo completed without returning a video.',
     'video_storage_failed': 'The completed video could not be saved.',
+    'gallery_payload_invalid': 'The gallery request must be a JSON object.',
+    'gallery_consent_required': 'Confirm that you want to publish this generated image.',
+    'gallery_caption_too_long': f'The caption cannot exceed {MAX_GALLERY_CAPTION_CHARS} characters.',
+    'gallery_version_invalid': 'This generated image is no longer available. Choose a recent version.',
+    'gallery_post_not_found': 'This shared street design does not exist.',
+    'gallery_visitor_invalid': 'This browser could not be identified for feedback. Refresh and try again.',
+    'gallery_storage_failed': 'The shared street design could not be saved. Please try again.',
 }
 
 
@@ -1868,6 +1886,11 @@ def index():
         image_providers=providers,
         default_provider=default_provider,
     )
+
+
+@app.route('/gallery')
+def gallery_page():
+    return render_template('gallery.html')
 
 
 def _preferences_from_payload(payload):
@@ -2597,6 +2620,427 @@ def _video_source_version(session, requested_version):
         if absolute_version == requested_version:
             return version
     return None
+
+
+def _gallery_post_key(post_id):
+    return f'{GALLERY_POST_KEY_PREFIX}:{post_id}'
+
+
+def _gallery_source_key(source_fingerprint):
+    return f'{GALLERY_SOURCE_KEY_PREFIX}:{source_fingerprint}'
+
+
+def _gallery_like_key(post_id):
+    return f'{GALLERY_LIKE_KEY_PREFIX}:{post_id}'
+
+
+def _redis_text(value):
+    if isinstance(value, bytes):
+        return value.decode('utf-8')
+    return str(value or '')
+
+
+def _gallery_post_from_mapping(mapping):
+    if not mapping:
+        return None
+    decoded = {
+        _redis_text(key): _redis_text(value)
+        for key, value in mapping.items()
+    }
+    post_id = decoded.get('id', '')
+    if not re.fullmatch(r'[a-f0-9]{16}', post_id):
+        return None
+    try:
+        return {
+            'id': post_id,
+            'image_url': decoded.get('image_url', ''),
+            'caption': decoded.get('caption', ''),
+            'design_label': decoded.get('design_label', ''),
+            'street_context': decoded.get('street_context', ''),
+            'language': normalize_language(decoded.get('language')),
+            'version': max(1, int(decoded.get('version') or 1)),
+            'created_at': float(decoded.get('created_at') or 0),
+            'likes': max(0, int(decoded.get('likes') or 0)),
+            'source_fingerprint': decoded.get('source_fingerprint', ''),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
+def _public_gallery_post(post):
+    return {
+        key: post[key]
+        for key in (
+            'id',
+            'image_url',
+            'caption',
+            'design_label',
+            'street_context',
+            'language',
+            'version',
+            'created_at',
+            'likes',
+        )
+    }
+
+
+def _prune_redis_gallery():
+    count = int(redis_client.zcard(GALLERY_INDEX_KEY))
+    excess = count - MAX_GALLERY_POSTS
+    if excess <= 0:
+        return
+    oldest_ids = redis_client.zrange(GALLERY_INDEX_KEY, 0, excess - 1)
+    if not oldest_ids:
+        return
+    post_ids = [_redis_text(value) for value in oldest_ids]
+    pipeline = redis_client.pipeline()
+    for post_id in post_ids:
+        pipeline.hget(
+            _gallery_post_key(post_id),
+            'source_fingerprint',
+        )
+    source_fingerprints = pipeline.execute()
+    pipeline = redis_client.pipeline()
+    for post_id, source_fingerprint in zip(
+        post_ids,
+        source_fingerprints,
+    ):
+        pipeline.delete(
+            _gallery_post_key(post_id),
+            _gallery_like_key(post_id),
+        )
+        if source_fingerprint:
+            pipeline.delete(
+                _gallery_source_key(_redis_text(source_fingerprint))
+            )
+    pipeline.zrem(GALLERY_INDEX_KEY, *post_ids)
+    pipeline.execute()
+
+
+def _create_gallery_post(post, source_fingerprint):
+    """Persist one idempotent gallery post and return (post, created)."""
+    if redis_client:
+        source_key = _gallery_source_key(source_fingerprint)
+        try:
+            existing_id = redis_client.get(source_key)
+            if existing_id:
+                existing = _gallery_post_from_mapping(
+                    redis_client.hgetall(
+                        _gallery_post_key(_redis_text(existing_id))
+                    )
+                )
+                if existing:
+                    return existing, False
+                redis_client.delete(source_key)
+
+            claimed = redis_client.set(
+                source_key,
+                post['id'],
+                nx=True,
+            )
+            if not claimed:
+                existing_id = redis_client.get(source_key)
+                existing = _gallery_post_from_mapping(
+                    redis_client.hgetall(
+                        _gallery_post_key(_redis_text(existing_id))
+                    )
+                )
+                if existing:
+                    return existing, False
+                raise RuntimeError('gallery source claim has no post')
+
+            stored = dict(post)
+            stored['source_fingerprint'] = source_fingerprint
+            pipeline = redis_client.pipeline()
+            pipeline.hset(
+                _gallery_post_key(post['id']),
+                mapping=stored,
+            )
+            pipeline.zadd(
+                GALLERY_INDEX_KEY,
+                {post['id']: post['created_at']},
+            )
+            pipeline.execute()
+            _prune_redis_gallery()
+            return stored, True
+        except Exception as error:
+            print(
+                'Redis gallery write failed; using local gallery '
+                f'({error.__class__.__name__})'
+            )
+
+    with GALLERY_LOCK:
+        existing_id = GALLERY_SOURCE_IDS.get(source_fingerprint)
+        if existing_id and existing_id in GALLERY_POSTS:
+            return dict(GALLERY_POSTS[existing_id]), False
+        stored = dict(post)
+        stored['source_fingerprint'] = source_fingerprint
+        GALLERY_POSTS[post['id']] = stored
+        GALLERY_SOURCE_IDS[source_fingerprint] = post['id']
+        GALLERY_VOTES.setdefault(post['id'], set())
+        while len(GALLERY_POSTS) > MAX_GALLERY_POSTS:
+            oldest_id = min(
+                GALLERY_POSTS,
+                key=lambda item_id: GALLERY_POSTS[item_id]['created_at'],
+            )
+            removed = GALLERY_POSTS.pop(oldest_id)
+            GALLERY_SOURCE_IDS.pop(
+                removed.get('source_fingerprint', ''),
+                None,
+            )
+            GALLERY_VOTES.pop(oldest_id, None)
+        return dict(stored), True
+
+
+def _list_gallery_posts(sort_order, limit):
+    posts = None
+    if redis_client:
+        try:
+            post_ids = [
+                _redis_text(value)
+                for value in redis_client.zrevrange(
+                    GALLERY_INDEX_KEY,
+                    0,
+                    MAX_GALLERY_POSTS - 1,
+                )
+            ]
+            pipeline = redis_client.pipeline()
+            for post_id in post_ids:
+                pipeline.hgetall(_gallery_post_key(post_id))
+            posts = [
+                post
+                for post in map(
+                    _gallery_post_from_mapping,
+                    pipeline.execute(),
+                )
+                if post
+            ]
+        except Exception as error:
+            print(
+                'Redis gallery read failed; using local gallery '
+                f'({error.__class__.__name__})'
+            )
+            posts = None
+    if posts is None:
+        with GALLERY_LOCK:
+            posts = [dict(post) for post in GALLERY_POSTS.values()]
+
+    if sort_order == 'popular':
+        posts.sort(
+            key=lambda post: (post['likes'], post['created_at']),
+            reverse=True,
+        )
+    else:
+        posts.sort(key=lambda post: post['created_at'], reverse=True)
+    return {
+        'items': [
+            _public_gallery_post(post)
+            for post in posts[:limit]
+        ],
+        'stats': {
+            'works': len(posts),
+            'likes': sum(post['likes'] for post in posts),
+        },
+    }
+
+
+def _like_gallery_post(post_id, voter_hash):
+    if redis_client:
+        try:
+            post_key = _gallery_post_key(post_id)
+            if not redis_client.exists(post_key):
+                return None
+            added = bool(
+                redis_client.sadd(
+                    _gallery_like_key(post_id),
+                    voter_hash,
+                )
+            )
+            if added:
+                likes = int(redis_client.hincrby(post_key, 'likes', 1))
+            else:
+                likes = int(redis_client.hget(post_key, 'likes') or 0)
+            return {'likes': likes, 'new_like': added}
+        except Exception as error:
+            print(
+                'Redis gallery feedback failed; using local gallery '
+                f'({error.__class__.__name__})'
+            )
+
+    with GALLERY_LOCK:
+        post = GALLERY_POSTS.get(post_id)
+        if not post:
+            return None
+        voters = GALLERY_VOTES.setdefault(post_id, set())
+        added = voter_hash not in voters
+        if added:
+            voters.add(voter_hash)
+            post['likes'] += 1
+        return {'likes': post['likes'], 'new_like': added}
+
+
+@app.route('/api/gallery', methods=['GET'])
+def list_gallery():
+    sort_order = request.args.get('sort', 'latest')
+    if sort_order not in {'latest', 'popular'}:
+        sort_order = 'latest'
+    try:
+        limit = int(request.args.get('limit', 24))
+    except (TypeError, ValueError):
+        limit = 24
+    limit = min(MAX_GALLERY_PAGE_SIZE, max(1, limit))
+    result = _list_gallery_posts(sort_order, limit)
+    result.update({'status': 'success', 'sort': sort_order})
+    return jsonify(result)
+
+
+@app.route('/api/gallery', methods=['POST'])
+def publish_gallery_post():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _api_error(
+            '成果牆發布資料需要 JSON 格式。',
+            400,
+            'gallery_payload_invalid',
+        )
+    if payload.get('consent') is not True:
+        return _api_error(
+            '請先確認你願意公開這張生成成果。',
+            400,
+            'gallery_consent_required',
+        )
+    caption = str(payload.get('caption') or '').strip()
+    if len(caption) > MAX_GALLERY_CAPTION_CHARS:
+        return _api_error(
+            f'作品說明不可超過 {MAX_GALLERY_CAPTION_CHARS} 個字元。',
+            400,
+            'gallery_caption_too_long',
+        )
+    session_id = str(payload.get('session_id') or '')
+    if not re.fullmatch(r'[a-f0-9]{12}', session_id):
+        return _api_error(
+            'session_id 格式不正確。',
+            400,
+            'session_id_invalid',
+        )
+    version = payload.get('version')
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        return _api_error(
+            '請選擇一張仍可使用的生成成果。',
+            400,
+            'gallery_version_invalid',
+        )
+    limit_response = _check_rate_limit(
+        'gallery_publish',
+        8,
+        24 * 60 * 60,
+    )
+    if limit_response:
+        return limit_response
+
+    session = _get_session(session_id)
+    if not session:
+        return _api_error(
+            '這個共創階段不存在或已過期，請重新生成圖片。',
+            404,
+            'session_expired',
+        )
+    source = _video_source_version(session, version)
+    if not source or not source.get('url'):
+        return _api_error(
+            '這張生成成果已不在可用版本中，請選擇較新的版本。',
+            404,
+            'gallery_version_invalid',
+        )
+
+    now = time.time()
+    spec = session.get('design_spec')
+    if not isinstance(spec, dict):
+        spec = {}
+    language = normalize_language(
+        session.get('language') or spec.get('language')
+    )
+    post = {
+        'id': uuid.uuid4().hex[:16],
+        'image_url': str(source['url']),
+        'caption': caption,
+        'design_label': str(spec.get('design_label') or ''),
+        'street_context': str(spec.get('street_context_label') or ''),
+        'language': language,
+        'version': version,
+        'created_at': now,
+        'likes': 0,
+    }
+    source_fingerprint = hashlib.sha256(
+        f'{session_id}:{version}'.encode()
+    ).hexdigest()
+    try:
+        stored, created = _create_gallery_post(
+            post,
+            source_fingerprint,
+        )
+    except Exception as error:
+        print(
+            f'[{g.request_id}] gallery storage failed: '
+            f'{error.__class__.__name__}: {error}'
+        )
+        return _api_error(
+            '目前無法儲存這張生成成果，請稍後再試。',
+            503,
+            'gallery_storage_failed',
+        )
+    return jsonify({
+        'status': 'success',
+        'post': _public_gallery_post(stored),
+        'created': created,
+        'gallery_url': url_for('gallery_page'),
+    }), 201 if created else 200
+
+
+@app.route('/api/gallery/<post_id>/like', methods=['POST'])
+def like_gallery_post(post_id):
+    if not re.fullmatch(r'[a-f0-9]{16}', post_id):
+        return _api_error(
+            '找不到這個街景成果。',
+            404,
+            'gallery_post_not_found',
+        )
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _api_error(
+            '成果牆回饋資料需要 JSON 格式。',
+            400,
+            'gallery_payload_invalid',
+        )
+    visitor_token = str(payload.get('visitor_token') or '')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', visitor_token):
+        return _api_error(
+            '無法辨識這次回饋，請重新整理後再試。',
+            400,
+            'gallery_visitor_invalid',
+        )
+    limit_response = _check_rate_limit(
+        'gallery_like',
+        120,
+        60 * 60,
+    )
+    if limit_response:
+        return limit_response
+    voter_hash = hashlib.sha256(
+        f'{post_id}:{visitor_token}'.encode()
+    ).hexdigest()
+    result = _like_gallery_post(post_id, voter_hash)
+    if result is None:
+        return _api_error(
+            '找不到這個街景成果。',
+            404,
+            'gallery_post_not_found',
+        )
+    return jsonify({
+        'status': 'success',
+        'liked': True,
+        **result,
+    })
 
 
 def _video_image(source):

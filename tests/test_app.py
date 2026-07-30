@@ -13,6 +13,9 @@ from knowledge_base.street_prompt_data_taiwan import get_taiwan_design_prompt
 def setup_function():
     street_app.SESSIONS.clear()
     street_app.RATE_LIMITS.clear()
+    street_app.GALLERY_POSTS.clear()
+    street_app.GALLERY_SOURCE_IDS.clear()
+    street_app.GALLERY_VOTES.clear()
 
 
 def make_png(width=1200, height=800, color='#6d806a'):
@@ -61,6 +64,10 @@ def test_index_renders_both_provider_choices(monkeypatch):
     assert b'id="comparison-range"' in response.data
     assert b'id="download-original-image"' in response.data
     assert b'id="download-current-image"' in response.data
+    assert b'href="/gallery"' in response.data
+    assert b'id="gallery-publish-launcher"' in response.data
+    assert b'id="gallery-share-modal"' in response.data
+    assert b'id="gallery-share-consent"' in response.data
     assert b'id="video-launcher"' in response.data
     assert b'id="video-modal"' in response.data
     assert b'name="video-speed"' in response.data
@@ -85,6 +92,137 @@ def test_index_renders_both_provider_choices(monkeypatch):
     assert b'data-i18n="loadingAccess"' in response.data
     assert '開始生成影片'.encode() in response.data
     assert response.headers['Cache-Control'] == 'no-store'
+
+
+def make_gallery_session(session_id, version=1, label='綠色生活街道'):
+    now = time.time()
+    street_app.SESSIONS[session_id] = {
+        'versions': [{
+            'version': version,
+            'url': f'/static/generated/{session_id}/v{version}.png',
+            'bytes': make_png(),
+            'mime_type': 'image/png',
+        }],
+        'history': [],
+        'initial_prompt': 'private source prompt',
+        'language': 'zh-TW',
+        'design_spec': {
+            'language': 'zh-TW',
+            'design_label': label,
+            'street_context_label': '住宅生活街道',
+        },
+        'version_count': version,
+        'created_at': now,
+        'updated_at': now,
+        '_operation_lock': threading.Lock(),
+    }
+    return session_id
+
+
+def test_gallery_page_renders_bilingual_feedback_shell():
+    response = street_app.app.test_client().get('/gallery')
+
+    assert response.status_code == 200
+    assert b'id="gallery-grid"' in response.data
+    assert b'id="gallery-work-count"' in response.data
+    assert b'data-sort="popular"' in response.data
+    assert '我喜歡這個街景設計！'.encode() in response.data
+    assert '原始上傳照片不會出現在成果牆'.encode() in response.data
+    assert b'href="/"' in response.data
+
+
+def test_gallery_publish_requires_explicit_consent(monkeypatch):
+    monkeypatch.setattr(street_app, 'redis_client', None)
+    session_id = make_gallery_session('aaaaaaaaaaaa')
+
+    response = street_app.app.test_client().post('/api/gallery', json={
+        'session_id': session_id,
+        'version': 1,
+        'caption': '安心步行',
+        'consent': False,
+    })
+
+    assert response.status_code == 400
+    assert response.get_json()['code'] == 'gallery_consent_required'
+    assert street_app.GALLERY_POSTS == {}
+
+
+def test_gallery_publish_exposes_only_generated_result(monkeypatch):
+    monkeypatch.setattr(street_app, 'redis_client', None)
+    session_id = make_gallery_session('aaaaaaaaaaaa')
+    client = street_app.app.test_client()
+
+    first = client.post('/api/gallery', json={
+        'session_id': session_id,
+        'version': 1,
+        'caption': '希望孩子每天都能安心走路',
+        'consent': True,
+    })
+    duplicate = client.post('/api/gallery', json={
+        'session_id': session_id,
+        'version': 1,
+        'caption': 'different caption should not create another post',
+        'consent': True,
+    })
+
+    assert first.status_code == 201
+    payload = first.get_json()
+    assert payload['created'] is True
+    assert payload['post']['image_url'].endswith('/v1.png')
+    assert payload['post']['design_label'] == '綠色生活街道'
+    assert payload['post']['street_context'] == '住宅生活街道'
+    assert 'source_fingerprint' not in payload['post']
+    assert 'session_id' not in payload['post']
+    assert 'private source prompt' not in first.get_data(as_text=True)
+    assert duplicate.status_code == 200
+    assert duplicate.get_json()['created'] is False
+    assert duplicate.get_json()['post']['id'] == payload['post']['id']
+    assert len(street_app.GALLERY_POSTS) == 1
+
+
+def test_gallery_feedback_is_deduplicated_and_sortable(monkeypatch):
+    monkeypatch.setattr(street_app, 'redis_client', None)
+    client = street_app.app.test_client()
+    first_session = make_gallery_session(
+        'aaaaaaaaaaaa',
+        label='第一個設計',
+    )
+    first = client.post('/api/gallery', json={
+        'session_id': first_session,
+        'version': 1,
+        'consent': True,
+    }).get_json()['post']
+
+    second_session = make_gallery_session(
+        'bbbbbbbbbbbb',
+        label='第二個設計',
+    )
+    second = client.post('/api/gallery', json={
+        'session_id': second_session,
+        'version': 1,
+        'consent': True,
+    }).get_json()['post']
+
+    visitor = 'browser_visitor_12345'
+    first_like = client.post(
+        f"/api/gallery/{first['id']}/like",
+        json={'visitor_token': visitor},
+    )
+    repeated_like = client.post(
+        f"/api/gallery/{first['id']}/like",
+        json={'visitor_token': visitor},
+    )
+    latest = client.get('/api/gallery?sort=latest').get_json()
+    popular = client.get('/api/gallery?sort=popular').get_json()
+
+    assert first_like.status_code == 200
+    assert first_like.get_json()['new_like'] is True
+    assert first_like.get_json()['likes'] == 1
+    assert repeated_like.get_json()['new_like'] is False
+    assert repeated_like.get_json()['likes'] == 1
+    assert latest['items'][0]['id'] == second['id']
+    assert popular['items'][0]['id'] == first['id']
+    assert popular['stats'] == {'works': 2, 'likes': 1}
 
 
 def test_every_homepage_preset_resolves_to_specialized_prompt():

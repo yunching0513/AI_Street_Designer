@@ -48,5 +48,7 @@ services:
         value: '120'
       - key: MAX_VIDEOS_PER_DAY
         value: '3'
+      - key: MAX_GALLERY_POSTS
+        value: '500'
       - key: STATE_KEY_PREFIX
         value: ai-street-designer

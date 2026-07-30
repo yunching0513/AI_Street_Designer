@@ -29,9 +29,12 @@
                 <span class="logo-emoji">✨</span>
             </div>
             <p class="subtitle" data-i18n="subtitle">和小綠一起，把你家門口的街道變得更可愛 💕</p>
-            <div class="language-switch" role="group" aria-label="Language">
-                <button type="button" data-language="zh-TW" aria-pressed="true">中文</button>
-                <button type="button" data-language="en" aria-pressed="false">EN</button>
+            <div class="header-tools">
+                <a class="gallery-nav-link" href="/gallery" data-i18n="galleryNav">看看大家的街道成果</a>
+                <div class="language-switch" role="group" aria-label="Language">
+                    <button type="button" data-language="zh-TW" aria-pressed="true">中文</button>
+                    <button type="button" data-language="en" aria-pressed="false">EN</button>
+                </div>
             </div>
         </header>
 
@@ -289,6 +292,14 @@
                         </button>
                     </div>
                     <div class="version-strip" id="version-strip"></div>
+                    <button class="gallery-publish-launcher" id="gallery-publish-launcher" type="button" disabled>
+                        <span class="gallery-publish-icon" aria-hidden="true">💚</span>
+                        <span class="gallery-publish-copy">
+                            <strong data-i18n="publishGallery">分享至街景成果牆</strong>
+                            <small data-i18n="publishGallerySub">只會公開目前的生成圖，原始照片不公開</small>
+                        </span>
+                        <span aria-hidden="true">→</span>
+                    </button>
                     <button class="video-launcher" id="video-launcher" type="button" disabled>
                         <span class="video-launcher-icon" aria-hidden="true">🎬</span>
                         <span class="video-launcher-copy">
@@ -449,6 +460,58 @@
                             <button class="video-confirm-button" type="submit">
                                 <span data-i18n="confirmVideo">開始生成影片</span>
                                 <span aria-hidden="true">🎬</span>
+                            </button>
+                        </div>
+                    </form>
+                </section>
+            </div>
+
+            <div class="video-modal-backdrop hidden" id="gallery-share-modal" role="presentation">
+                <section
+                    class="video-setup-card gallery-share-card"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="gallery-share-title"
+                    aria-describedby="gallery-share-description"
+                >
+                    <button class="video-modal-close" id="gallery-share-close" type="button" aria-label="關閉分享設定" data-i18n-aria-label="closeGalleryShare">✕</button>
+                    <div class="video-setup-heading">
+                        <span class="video-setup-kicker" data-i18n="galleryShareKicker">SHARE YOUR STREET IDEA</span>
+                        <h3 id="gallery-share-title" data-i18n="galleryShareTitle">把這個街道想像分享給大家</h3>
+                        <p id="gallery-share-description" data-i18n="galleryShareDescription">其他人可以在成果牆看到這張生成圖，並按下「我喜歡這個街景設計！」給你回饋。</p>
+                    </div>
+
+                    <img class="gallery-share-preview" id="gallery-share-preview" src="" alt="準備公開的街景生成成果" data-i18n-alt="gallerySharePreviewAlt">
+
+                    <form id="gallery-share-form">
+                        <label class="gallery-caption-field" for="gallery-share-caption">
+                            <span data-i18n="galleryCaptionLabel">想說些什麼？（選填）</span>
+                            <textarea
+                                id="gallery-share-caption"
+                                maxlength="180"
+                                rows="3"
+                                placeholder="例如：希望上下學的孩子都能安心走路"
+                                data-i18n-placeholder="galleryCaptionPlaceholder"
+                            ></textarea>
+                            <small><span id="gallery-caption-count">0</span> / 180</small>
+                        </label>
+
+                        <label class="gallery-consent">
+                            <input id="gallery-share-consent" type="checkbox" required>
+                            <span>
+                                <strong data-i18n="galleryConsentTitle">我同意公開目前這張生成成果</strong>
+                                <small data-i18n="galleryConsentBody">原始上傳照片、對話內容與個人資料都不會公開；請先確認生成圖中沒有不想分享的資訊。</small>
+                            </span>
+                        </label>
+
+                        <p class="gallery-share-status" id="gallery-share-status" aria-live="polite"></p>
+                        <a class="gallery-share-success-link hidden" id="gallery-share-success-link" href="/gallery" data-i18n="viewGallery">前往成果牆看看 →</a>
+
+                        <div class="video-form-actions">
+                            <button class="video-cancel-button" id="gallery-share-cancel" type="button" data-i18n="galleryNotNow">這次先不要</button>
+                            <button class="video-confirm-button gallery-share-confirm" id="gallery-share-submit" type="submit">
+                                <span data-i18n="confirmGalleryShare">確認分享</span>
+                                <span aria-hidden="true">💚</span>
                             </button>
                         </div>
                     </form>
