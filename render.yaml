@@ -30,6 +30,8 @@ services:
         value: gemini-flash-latest
       - key: OPENAI_IMAGE_MODEL
         value: gpt-image-2
+      - key: VEO_VIDEO_MODEL
+        value: veo-3.1-generate-preview
       - key: SESSION_TTL_SECONDS
         value: '7200'
       - key: MAX_SESSIONS
@@ -44,5 +46,9 @@ services:
         value: '60'
       - key: MAX_STREET_FETCHES_PER_HOUR
         value: '120'
+      - key: MAX_VIDEOS_PER_DAY
+        value: '3'
+      - key: MAX_GALLERY_POSTS
+        value: '500'
       - key: STATE_KEY_PREFIX
         value: ai-street-designer

@@ -5,12 +5,15 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import mimetypes
 import os
 import re
 import resource
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -20,7 +23,7 @@ import uuid
 
 # Bumped by hand on each deploy-worthy change — /api/diag reports it, so we
 # can tell at a glance whether the running instance actually has a fix.
-CODE_VERSION = '2026-07-25-hardening2'
+CODE_VERSION = '2026-07-30-gallery1'
 
 def rss_mb():
     """Resident memory of this worker, in MB (Linux)."""
@@ -33,18 +36,30 @@ def rss_mb():
 if sys.version_info < (3, 10):
     try:
         import importlib.metadata
+
         import importlib_metadata
         importlib.metadata.packages_distributions = importlib_metadata.packages_distributions
     except ImportError:
         pass
 
-from flask import Flask, render_template, request, jsonify, url_for, Response, g
+import imageio_ffmpeg
+from dotenv import load_dotenv
+from flask import Flask, Response, g, jsonify, render_template, request, url_for
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
 from PIL import Image, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
+
+from knowledge_base.knowledge_runtime import (
+    build_design_spec,
+    build_visual_audit_checklist,
+    compile_generation_prompt,
+    normalize_language,
+    normalize_preferences,
+    public_design_spec,
+    refine_design_spec,
+)
 
 try:
     from openai import OpenAI
@@ -95,6 +110,10 @@ STATE_KEY_PREFIX = os.getenv(
 
 GEMINI_IMAGE_MODEL = os.getenv('GEMINI_IMAGE_MODEL', 'gemini-3-pro-image')
 OPENAI_IMAGE_MODEL = os.getenv('OPENAI_IMAGE_MODEL', 'gpt-image-2')
+VEO_VIDEO_MODEL = os.getenv(
+    'VEO_VIDEO_MODEL',
+    'veo-3.1-generate-preview',
+)
 COPILOT_TEXT_MODELS = [
     model.strip()
     for model in os.getenv('GEMINI_TEXT_MODELS', 'gemini-flash-latest').split(',')
@@ -116,10 +135,14 @@ def _env_int(name, default, minimum=1, maximum=None):
 
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_MASK_BYTES = 4 * 1024 * 1024
 MAX_IMAGE_PIXELS = 24_000_000
 MAX_PROMPT_CHARS = 2_000
 MAX_CHAT_CHARS = 1_000
 MAX_FETCH_BYTES = 5 * 1024 * 1024
+OPENAI_MIN_IMAGE_PIXELS = 655_360
+OPENAI_MAX_IMAGE_PIXELS = 8_294_400
+OPENAI_MAX_IMAGE_EDGE = 3_840
 SESSION_TTL_SECONDS = _env_int('SESSION_TTL_SECONDS', 7_200, 300, 86_400)
 MAX_SESSIONS = _env_int('MAX_SESSIONS', 40, 5, 200)
 MAX_HISTORY_TURNS = _env_int('MAX_HISTORY_TURNS', 30, 8, 100)
@@ -130,6 +153,11 @@ MAX_CHATS_PER_10_MINUTES = _env_int(
     'MAX_CHATS_PER_10_MINUTES', 60, 1, 1_000)
 MAX_STREET_FETCHES_PER_HOUR = _env_int(
     'MAX_STREET_FETCHES_PER_HOUR', 120, 1, 2_000)
+MAX_VIDEOS_PER_DAY = _env_int('MAX_VIDEOS_PER_DAY', 3, 1, 50)
+MAX_VIDEO_JOBS_PER_SESSION = 6
+MAX_GALLERY_CAPTION_CHARS = 180
+MAX_GALLERY_POSTS = _env_int('MAX_GALLERY_POSTS', 500, 20, 5_000)
+MAX_GALLERY_PAGE_SIZE = 48
 
 client = None
 openai_client = None
@@ -377,6 +405,14 @@ RATE_LIMITS = {}
 RATE_LIMITS_LOCK = threading.Lock()
 SESSION_INDEX_KEY = f'{STATE_KEY_PREFIX}:sessions'
 SESSION_LOCK_SECONDS = 360
+GALLERY_INDEX_KEY = f'{STATE_KEY_PREFIX}:gallery:index'
+GALLERY_POST_KEY_PREFIX = f'{STATE_KEY_PREFIX}:gallery:post'
+GALLERY_SOURCE_KEY_PREFIX = f'{STATE_KEY_PREFIX}:gallery:source'
+GALLERY_LIKE_KEY_PREFIX = f'{STATE_KEY_PREFIX}:gallery:likes'
+GALLERY_POSTS = {}
+GALLERY_SOURCE_IDS = {}
+GALLERY_VOTES = {}
+GALLERY_LOCK = threading.Lock()
 
 RATE_LIMIT_SCRIPT = """
 local count = redis.call('INCR', KEYS[1])
@@ -438,6 +474,44 @@ GREETING_SYSTEM_PROMPT = COPILOT_PERSONA + """
   "suggestions": ["建議1", "建議2", "建議3"]
 }"""
 
+EN_COPILOT_PERSONA = """You are Greenie 🌱, a warm, observant AI street-design co-pilot who cares about sustainable, people-first streets.
+Work alongside the user, notice visible design details, and reply only in natural English. Keep each response to 2–4 sentences and use no more than two emoji."""
+
+EN_CHAT_SYSTEM_PROMPT = EN_COPILOT_PERSONA + """
+
+For every user message:
+1. Inspect the latest street image.
+2. Classify the intent:
+   - "refine" when the user wants a visible image change.
+   - "chat" for questions, reactions, or discussion.
+3. Reply warmly and mention visible details when helpful.
+4. Offer three short next-step suggestions.
+5. For a refinement, write a precise English image-editing instruction; otherwise leave refine_prompt empty.
+
+Return JSON only:
+{
+  "intent": "refine" or "chat",
+  "message": "English reply",
+  "refine_prompt": "English image-edit instruction or an empty string",
+  "suggestions": ["Suggestion 1", "Suggestion 2", "Suggestion 3"]
+}"""
+
+EN_GREETING_SYSTEM_PROMPT = EN_COPILOT_PERSONA + """
+
+The user uploaded a street image and requested: "{user_prompt}"
+The first design version is attached.
+
+Please:
+1. Welcome the user in 2–3 sentences and identify specific visible changes.
+2. Ask one engaging question that invites co-design.
+3. Offer three short next-step suggestions.
+
+Return JSON only:
+{
+  "message": "English welcome message",
+  "suggestions": ["Suggestion 1", "Suggestion 2", "Suggestion 3"]
+}"""
+
 
 def _parse_json_response(text):
     """Robustly parse JSON from a possibly fenced LLM response."""
@@ -496,6 +570,49 @@ def _validate_uploaded_image(file):
     return image_bytes, mime_type
 
 
+def _validate_edit_mask(file, reference_image_bytes):
+    """Validate and normalize an optional user-drawn image-edit mask.
+
+    The returned PNG has the same dimensions as the reference image. Opaque
+    pixels are preserved and transparent pixels are the requested edit area.
+    """
+    mask_bytes = file.read(MAX_MASK_BYTES + 1)
+    if not mask_bytes:
+        raise ValueError('改造範圍遮罩是空的。')
+    if len(mask_bytes) > MAX_MASK_BYTES:
+        raise ValueError('改造範圍遮罩不可超過 4 MB。')
+
+    try:
+        with Image.open(io.BytesIO(reference_image_bytes)) as reference:
+            reference_size = reference.size
+        with Image.open(io.BytesIO(mask_bytes)) as mask:
+            if (mask.format or '').upper() != 'PNG':
+                raise ValueError('改造範圍遮罩必須是 PNG。')
+            if mask.size != reference_size:
+                raise ValueError('改造範圍遮罩必須與上傳圖片尺寸一致。')
+            if 'A' not in mask.getbands():
+                raise ValueError('改造範圍遮罩必須包含透明區域。')
+            normalized = mask.convert('RGBA')
+            alpha = normalized.getchannel('A')
+            minimum_alpha, maximum_alpha = alpha.getextrema()
+            if minimum_alpha == 255:
+                raise ValueError('請先在照片上畫出希望 AI 改造的範圍。')
+            if maximum_alpha == 0:
+                raise ValueError('遮罩不可把整張照片都設為可改造。')
+            output = io.BytesIO()
+            normalized.save(output, format='PNG', optimize=True)
+            return output.getvalue()
+    except ValueError:
+        raise
+    except (
+        Image.DecompressionBombError,
+        UnidentifiedImageError,
+        OSError,
+        SyntaxError,
+    ) as e:
+        raise ValueError('改造範圍遮罩不是有效的 PNG 圖片。') from e
+
+
 IMAGE_PROVIDER_LABELS = {
     'gemini': 'Google Gemini',
     'openai': 'OpenAI GPT Image',
@@ -506,6 +623,7 @@ PRESET_STYLE_KEYS = {
     'transit-priority': '公車彎與公車優先道 (Bus Bay & Transit Priority)',
     'protected-bike-lane': '自行車專用道 (Protected Bike Lane)',
     'green-street': '街道綠化與設施帶 (Green Street)',
+    'reduce-motor-traffic': '減少汽機車與道路空間重分配 (Reduced Motor Traffic)',
 }
 
 
@@ -561,10 +679,24 @@ def _openai_image_settings(image_bytes, resolution):
         quality = 'medium'
 
     def multiple_of_16(value):
-        return max(16, round(value / 16) * 16)
+        return max(16, math.ceil(value / 16) * 16)
 
     long_edge = multiple_of_16(long_edge)
     short_edge = multiple_of_16(short_edge)
+    total_pixels = long_edge * short_edge
+    if total_pixels < OPENAI_MIN_IMAGE_PIXELS:
+        scale = math.sqrt(OPENAI_MIN_IMAGE_PIXELS / total_pixels)
+        long_edge = multiple_of_16(long_edge * scale)
+        short_edge = multiple_of_16(short_edge * scale)
+
+    while long_edge * short_edge > OPENAI_MAX_IMAGE_PIXELS:
+        if long_edge >= short_edge:
+            long_edge -= 16
+        else:
+            short_edge -= 16
+    long_edge = min(long_edge, OPENAI_MAX_IMAGE_EDGE)
+    short_edge = min(short_edge, OPENAI_MAX_IMAGE_EDGE)
+
     size = (
         f'{long_edge}x{short_edge}'
         if is_landscape
@@ -573,11 +705,27 @@ def _openai_image_settings(image_bytes, resolution):
     return size, quality
 
 
-def _generate_gemini_image(image_bytes, mime_type, prompt_text, resolution):
+def _generate_gemini_image(
+    image_bytes,
+    mime_type,
+    prompt_text,
+    resolution,
+    mask_bytes=None,
+):
     transformation_parts = [
         types.Part.from_text(text=prompt_text),
         types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
     ]
+    if mask_bytes:
+        transformation_parts.extend([
+            types.Part.from_text(text=(
+                "The next PNG is an edit-area guide aligned to the reference "
+                "image. Transparent pixels identify the area requested for "
+                "street-level changes; opaque white pixels should be preserved. "
+                "Treat it as guidance and still preserve buildings and viewpoint."
+            )),
+            types.Part.from_bytes(data=mask_bytes, mime_type='image/png'),
+        ])
     kwargs = dict(
         model=GEMINI_IMAGE_MODEL,
         contents=[types.Content(role='user', parts=transformation_parts)]
@@ -598,7 +746,13 @@ def _generate_gemini_image(image_bytes, mime_type, prompt_text, resolution):
     return None
 
 
-def _generate_openai_image(image_bytes, mime_type, prompt_text, resolution):
+def _generate_openai_image(
+    image_bytes,
+    mime_type,
+    prompt_text,
+    resolution,
+    mask_bytes=None,
+):
     size, quality = _openai_image_settings(image_bytes, resolution)
     supported_extensions = {
         'image/jpeg': '.jpg',
@@ -619,7 +773,7 @@ def _generate_openai_image(image_bytes, mime_type, prompt_text, resolution):
 
     upload = io.BytesIO(image_bytes)
     upload.name = f'reference{extension}'
-    response = openai_client.images.edit(
+    request_args = dict(
         model=OPENAI_IMAGE_MODEL,
         image=upload,
         prompt=prompt_text,
@@ -627,6 +781,11 @@ def _generate_openai_image(image_bytes, mime_type, prompt_text, resolution):
         quality=quality,
         output_format='png',
     )
+    if mask_bytes:
+        mask_upload = io.BytesIO(mask_bytes)
+        mask_upload.name = 'edit-mask.png'
+        request_args['mask'] = mask_upload
+    response = openai_client.images.edit(**request_args)
     if not response.data or not response.data[0].b64_json:
         return None
     return base64.b64decode(response.data[0].b64_json, validate=True)
@@ -638,18 +797,29 @@ def _generate_image_from_reference(
     prompt_text,
     resolution='2K',
     provider='gemini',
+    mask_bytes=None,
 ):
     """Dispatch one image edit to the provider selected by the user."""
     if provider == 'gemini':
         if not client:
             raise RuntimeError('Gemini image provider is not configured')
         return _generate_gemini_image(
-            image_bytes, mime_type, prompt_text, resolution)
+            image_bytes,
+            mime_type,
+            prompt_text,
+            resolution,
+            mask_bytes=mask_bytes,
+        )
     if provider == 'openai':
         if not openai_client:
             raise RuntimeError('OpenAI image provider is not configured')
         return _generate_openai_image(
-            image_bytes, mime_type, prompt_text, resolution)
+            image_bytes,
+            mime_type,
+            prompt_text,
+            resolution,
+            mask_bytes=mask_bytes,
+        )
     raise ValueError(f'Unsupported image provider: {provider}')
 
 
@@ -685,11 +855,38 @@ def _save_generated_image(session_id, version, image_bytes):
     # instance and gets workers killed mid-request (bare 500/502s).
     small_bytes, small_mime = _shrink_for_llm(image_bytes)
     version_meta = {
+        'version': version,
         'url': image_url,
         'bytes': small_bytes,
         'mime_type': small_mime,
     }
     return image_url, version_meta
+
+
+def _save_generated_video(session_id, job_id, video_bytes):
+    """Persist a completed MP4 and return its public URL."""
+    filename = f'{job_id}.mp4'
+    if USE_BLOB:
+        blob_result = vercel_blob.put(
+            f'generated/{session_id}/videos/{filename}',
+            video_bytes,
+            {'access': 'public', 'addRandomSuffix': 'false'},
+        )
+        return blob_result['url']
+
+    video_dir = os.path.join(
+        app.config['GENERATED_FOLDER'],
+        session_id,
+        'videos',
+    )
+    os.makedirs(video_dir, exist_ok=True)
+    filepath = os.path.join(video_dir, filename)
+    with open(filepath, 'wb') as output:
+        output.write(video_bytes)
+    return url_for(
+        'static',
+        filename=f'generated/{session_id}/videos/{filename}',
+    )
 
 
 def _prune_generated_dirs(keep=40):
@@ -740,18 +937,208 @@ def _copilot_generate_json(parts):
     raise last_err
 
 
-def _generate_copilot_greeting(image_bytes, mime_type, user_prompt):
-    """Have 小綠 review the new image and craft a welcome message + suggestions."""
+def _pending_visual_audit(design_spec):
+    language = normalize_language((design_spec or {}).get('language'))
+    return {
+        'status': 'not_run',
+        'score': None,
+        'summary': (
+            'The model visual audit has not run; please review this concept with users and a design professional.'
+            if language == 'en'
+            else '尚未完成模型視覺稽核，請由使用者與設計專業者共同確認。'
+        ),
+        'checks': build_visual_audit_checklist(design_spec or {}),
+        'disclaimer': (
+            (
+                'This checks visible consistency and plausibility only; it does not confirm dimensions, compliance, or constructability.'
+            )
+            if language == 'en'
+            else (
+                '只檢查畫面可見的一致性與合理性，不代表尺寸量測、'
+                '法規符合或工程可施工性已獲確認。'
+            )
+        ),
+    }
+
+
+def _normalize_visual_audit(data, design_spec):
+    fallback = _pending_visual_audit(design_spec)
+    if not isinstance(data, dict):
+        return fallback
+
+    expected = {
+        item['id']: item for item in build_visual_audit_checklist(design_spec)
+    }
+    model_checks = {
+        str(item.get('id')): item
+        for item in data.get('checks', [])
+        if isinstance(item, dict)
+    }
+    checks = []
+    for check_id, base in expected.items():
+        model_check = model_checks.get(check_id, {})
+        status = model_check.get('status')
+        if status not in ('pass', 'warning', 'fail'):
+            status = 'warning'
+        checks.append({
+            'id': check_id,
+            'label': base['label'],
+            'status': status,
+            'note': str(model_check.get('note') or '')[:240],
+        })
+
+    try:
+        score = int(data.get('score'))
+    except (TypeError, ValueError):
+        score = None
+    if score is not None:
+        score = max(0, min(100, score))
+    return {
+        'status': 'reviewed',
+        'score': score,
+        'summary': str(
+            data.get('summary')
+            or (
+                'The initial visual review is complete.'
+                if normalize_language(design_spec.get('language')) == 'en'
+                else '已完成畫面初步檢查。'
+            )
+        )[:400],
+        'checks': checks,
+        'disclaimer': fallback['disclaimer'],
+    }
+
+
+def _visual_audit_prompt(design_spec):
+    language = normalize_language(design_spec.get('language'))
+    checklist = build_visual_audit_checklist(design_spec)
+    interventions = ('; ' if language == 'en' else '；').join(
+        design_spec.get('requested_interventions', [])
+    )
+    check_lines = '\n'.join(
+        f"- {item['id']}: {item['label']}" for item in checklist
+    )
+    if language == 'en':
+        return f"""You are visually auditing a street-design concept image.
+Assess only what is visible. Do not claim measured dimensions, legal compliance,
+or construction readiness.
+
+Design goal: {design_spec.get('design_label', 'People-first street improvement')}
+Expected visible changes: {interventions}
+
+Checks:
+{check_lines}
+
+Return JSON only:
+{{
+  "score": "integer from 0 to 100",
+  "summary": "English summary, no more than two sentences",
+  "checks": [
+    {{"id":"preservation","status":"pass|warning|fail","note":"visible evidence"}},
+    {{"id":"requested_change","status":"pass|warning|fail","note":"visible evidence"}},
+    {{"id":"continuity","status":"pass|warning|fail","note":"visible evidence"}},
+    {{"id":"accessibility","status":"pass|warning|fail","note":"visible evidence"}},
+    {{"id":"realism","status":"pass|warning|fail","note":"visible evidence"}}
+  ]
+}}"""
+    return f"""你是街道設計概念圖的視覺稽核員。只依附圖中可見內容檢查，
+不可宣稱已量測尺寸、符合法規或可直接施工。
+
+設計目標：{design_spec.get('design_label', '人本街道改善')}
+應清楚呈現：{interventions}
+
+逐項檢查：
+{check_lines}
+
+只回 JSON：
+{{
+  "score": 0到100的整數,
+  "summary": "繁體中文總結，最多兩句",
+  "checks": [
+    {{"id":"preservation","status":"pass|warning|fail","note":"可見依據"}},
+    {{"id":"requested_change","status":"pass|warning|fail","note":"可見依據"}},
+    {{"id":"continuity","status":"pass|warning|fail","note":"可見依據"}},
+    {{"id":"accessibility","status":"pass|warning|fail","note":"可見依據"}},
+    {{"id":"realism","status":"pass|warning|fail","note":"可見依據"}}
+  ]
+}}"""
+
+
+def _audit_generated_design(image_bytes, mime_type, design_spec):
+    fallback = _pending_visual_audit(design_spec)
+    if not client:
+        return fallback
+    try:
+        small_bytes, small_mime = _shrink_for_llm(image_bytes)
+        data = _copilot_generate_json([
+            types.Part.from_text(text=_visual_audit_prompt(design_spec)),
+            types.Part.from_bytes(data=small_bytes, mime_type=small_mime),
+        ])
+        return _normalize_visual_audit(data, design_spec)
+    except Exception as e:
+        print(f"Visual audit failed: {e}")
+        return fallback
+
+
+def _generate_copilot_greeting(
+    image_bytes,
+    mime_type,
+    user_prompt,
+    design_spec=None,
+):
+    """Review the new image and craft a greeting plus visual audit."""
+    language = normalize_language((design_spec or {}).get('language'))
+    pending_audit = _pending_visual_audit(design_spec or {})
     fallback = {
-        'message': '嗨，我是小綠 🌱 第一版設計出來了！你覺得整體感覺如何？想往哪個方向繼續調整？',
-        'suggestions': ['再加一些樹', '加點街頭藝術', '換成夜景氛圍']
+        'message': (
+            'Hi, I’m Greenie 🌱 Your first design is ready. How does the overall direction feel, and what would you like to adjust next?'
+            if language == 'en'
+            else '嗨，我是小綠 🌱 第一版設計出來了！你覺得整體感覺如何？想往哪個方向繼續調整？'
+        ),
+        'suggestions': (
+            ['Add more trees', 'Improve crossings', 'Try an evening view']
+            if language == 'en'
+            else ['再加一些樹', '加點街頭藝術', '換成夜景氛圍']
+        ),
+        'audit': pending_audit,
     }
     if not client:
         return fallback
     try:
         # str.replace, NOT str.format — the template's JSON example braces
         # make .format() raise KeyError on every single call.
-        prompt = GREETING_SYSTEM_PROMPT.replace('{user_prompt}', user_prompt or "讓街道更宜居")
+        prompt_template = (
+            EN_GREETING_SYSTEM_PROMPT
+            if language == 'en'
+            else GREETING_SYSTEM_PROMPT
+        )
+        prompt = prompt_template.replace(
+            '{user_prompt}',
+            user_prompt
+            or (
+                "Make the street more liveable"
+                if language == 'en'
+                else "讓街道更宜居"
+            ),
+        )
+        if design_spec:
+            prompt += (
+                (
+                    "\n\nAdd a visual_audit object to the same JSON response."
+                    if language == 'en'
+                    else "\n\n請在同一份 JSON 另外加入 visual_audit 物件。"
+                )
+                + "\n"
+                + _visual_audit_prompt(design_spec)
+                + (
+                    "\nUse this outer structure:"
+                    if language == 'en'
+                    else "\n最外層格式為："
+                )
+                + '{"message":"...","suggestions":["..."],'
+                '"visual_audit":{"score":80,"summary":"...",'
+                '"checks":[...]}}'
+            )
         small_bytes, small_mime = _shrink_for_llm(image_bytes)
         parts = [
             types.Part.from_text(text=prompt),
@@ -760,32 +1147,63 @@ def _generate_copilot_greeting(image_bytes, mime_type, user_prompt):
         data = _copilot_generate_json(parts)
         return {
             'message': data.get('message', fallback['message']),
-            'suggestions': data.get('suggestions', fallback['suggestions'])[:3]
+            'suggestions': data.get('suggestions', fallback['suggestions'])[:3],
+            'audit': _normalize_visual_audit(
+                data.get('visual_audit'),
+                design_spec,
+            ) if design_spec else pending_audit,
         }
     except Exception as e:
         print(f"Greeting generation failed: {e}")
         return fallback
 
 
-def _decide_copilot_response(history, latest_image_bytes, mime_type, user_message):
+def _decide_copilot_response(
+    history,
+    latest_image_bytes,
+    mime_type,
+    user_message,
+    language='zh-TW',
+):
     """Ask 小綠 to classify intent and produce a chat reply + refine prompt."""
+    language = normalize_language(language)
     fallback = {
         'intent': 'chat',
-        'message': '嗯！我有聽到 🌱 但我剛剛卡住了，可以再說一次你想調整的地方嗎？',
+        'message': (
+            'I hear you 🌱 I got a little stuck—could you tell me once more what you would like to change?'
+            if language == 'en'
+            else '嗯！我有聽到 🌱 但我剛剛卡住了，可以再說一次你想調整的地方嗎？'
+        ),
         'refine_prompt': '',
-        'suggestions': ['再多一些綠化', '加長椅與休憩區', '換個天氣']
+        'suggestions': (
+            ['Add more greenery', 'Add seating', 'Change the weather']
+            if language == 'en'
+            else ['再多一些綠化', '加長椅與休憩區', '換個天氣']
+        ),
     }
     if not client:
         return fallback
     try:
-        history_text = "\n".join(
-            f"{'使用者' if h['role'] == 'user' else '小綠'}：{h['message']}"
-            for h in history[-8:]  # keep last 8 turns
-        ) or "(尚無歷史)"
-        prompt_text = (
-            CHAT_SYSTEM_PROMPT
-            + f"\n\n=== 對話歷史 ===\n{history_text}\n\n=== 使用者最新訊息 ===\n{user_message}"
-        )
+        if language == 'en':
+            history_text = "\n".join(
+                f"{'User' if h['role'] == 'user' else 'Greenie'}: {h['message']}"
+                for h in history[-8:]
+            ) or "(No previous conversation)"
+            prompt_text = (
+                EN_CHAT_SYSTEM_PROMPT
+                + f"\n\n=== CONVERSATION ===\n{history_text}"
+                f"\n\n=== LATEST USER MESSAGE ===\n{user_message}"
+            )
+        else:
+            history_text = "\n".join(
+                f"{'使用者' if h['role'] == 'user' else '小綠'}：{h['message']}"
+                for h in history[-8:]
+            ) or "(尚無歷史)"
+            prompt_text = (
+                CHAT_SYSTEM_PROMPT
+                + f"\n\n=== 對話歷史 ===\n{history_text}"
+                f"\n\n=== 使用者最新訊息 ===\n{user_message}"
+            )
         small_bytes, small_mime = _shrink_for_llm(latest_image_bytes)
         parts = [
             types.Part.from_text(text=prompt_text),
@@ -851,6 +1269,7 @@ def _serialize_session(session):
         if not isinstance(image_bytes, bytes):
             continue
         versions.append({
+            'version': int(version.get('version') or 0),
             'url': str(version.get('url') or ''),
             'bytes_b64': base64.b64encode(image_bytes).decode('ascii'),
             'mime_type': str(
@@ -866,10 +1285,46 @@ def _serialize_session(session):
         for turn in session.get('history', [])[-MAX_HISTORY_TURNS:]
         if isinstance(turn, dict)
     ]
+    video_jobs = []
+    for job in list(session.get('video_jobs', {}).values())[
+        -MAX_VIDEO_JOBS_PER_SESSION:
+    ]:
+        if not isinstance(job, dict):
+            continue
+        video_jobs.append({
+            key: job.get(key)
+            for key in (
+                'id',
+                'operation_name',
+                'operation_names',
+                'status',
+                'version',
+                'versions',
+                'mode',
+                'speed',
+                'duration',
+                'total_duration',
+                'format',
+                'aspect_ratio',
+                'video_url',
+                'error',
+                'created_at',
+                'updated_at',
+            )
+            if job.get(key) is not None
+        })
     payload = {
         'versions': versions,
         'history': history,
+        'video_jobs': video_jobs,
         'initial_prompt': str(session.get('initial_prompt') or ''),
+        'language': normalize_language(session.get('language')),
+        'design_spec': session.get('design_spec')
+        if isinstance(session.get('design_spec'), dict)
+        else {},
+        'audit': session.get('audit')
+        if isinstance(session.get('audit'), dict)
+        else {},
         'resolution': str(session.get('resolution') or '2K'),
         'provider': str(session.get('provider') or 'gemini'),
         'version_count': int(
@@ -906,6 +1361,7 @@ def _deserialize_session(raw):
         if mime_type not in ('image/jpeg', 'image/png', 'image/webp'):
             raise ValueError('invalid persisted image type')
         versions.append({
+            'version': int(version.get('version') or 0),
             'url': str(version.get('url') or ''),
             'bytes': image_bytes,
             'mime_type': mime_type,
@@ -922,10 +1378,61 @@ def _deserialize_session(raw):
         if isinstance(turn, dict)
     ]
     now = time.time()
+    design_spec = payload.get('design_spec')
+    if not isinstance(design_spec, dict):
+        design_spec = {}
+    audit = payload.get('audit')
+    if not isinstance(audit, dict):
+        audit = {}
+    video_jobs = {}
+    for job in payload.get('video_jobs', [])[-MAX_VIDEO_JOBS_PER_SESSION:]:
+        if not isinstance(job, dict):
+            continue
+        job_id = str(job.get('id') or '')
+        if not re.fullmatch(r'[a-f0-9]{16}', job_id):
+            continue
+        video_jobs[job_id] = {
+            'id': job_id,
+            'operation_name': str(job.get('operation_name') or ''),
+            'operation_names': [
+                str(name)
+                for name in (job.get('operation_names') or [])
+                if name
+            ][:4] or [str(job.get('operation_name') or '')],
+            'status': str(job.get('status') or 'queued'),
+            'version': int(job.get('version') or 1),
+            'versions': [
+                int(version)
+                for version in (job.get('versions') or [])
+                if str(version).isdigit()
+            ][:5] or [int(job.get('version') or 1)],
+            'mode': (
+                'sequence'
+                if job.get('mode') == 'sequence'
+                else 'single'
+            ),
+            'speed': str(job.get('speed') or 'natural'),
+            'duration': int(job.get('duration') or 8),
+            'total_duration': int(
+                job.get('total_duration')
+                or job.get('duration')
+                or 8
+            ),
+            'format': str(job.get('format') or 'landscape'),
+            'aspect_ratio': str(job.get('aspect_ratio') or '16:9'),
+            'video_url': str(job.get('video_url') or ''),
+            'error': str(job.get('error') or ''),
+            'created_at': float(job.get('created_at') or now),
+            'updated_at': float(job.get('updated_at') or now),
+        }
     return {
         'versions': versions,
         'history': history,
+        'video_jobs': video_jobs,
         'initial_prompt': str(payload.get('initial_prompt') or ''),
+        'language': normalize_language(payload.get('language')),
+        'design_spec': design_spec,
+        'audit': audit,
         'resolution': str(payload.get('resolution') or '2K'),
         'provider': str(payload.get('provider') or 'gemini'),
         'version_count': max(
@@ -1140,10 +1647,92 @@ def _refresh_persisted_session(session_id, fallback_session):
     return persisted_session
 
 
+EN_API_ERRORS = {
+    'design_plan_invalid': 'The design-plan request must be a JSON object.',
+    'prompt_required': 'Describe the street transformation you would like to create.',
+    'prompt_too_long': f'The transformation description cannot exceed {MAX_PROMPT_CHARS} characters.',
+    'preset_invalid': 'This quick transformation option is not supported.',
+    'knowledge_runtime_unavailable': 'The street-design knowledge runtime is temporarily unavailable.',
+    'image_required': 'Upload a street image first.',
+    'image_invalid': 'The uploaded image is invalid. Use a valid JPEG, PNG, or WebP image.',
+    'provider_invalid': 'This image-generation provider is not supported.',
+    'provider_unavailable': 'The selected image provider is not configured on the server.',
+    'design_preferences_invalid': 'The street-context settings are invalid. Review the design plan and try again.',
+    'mask_invalid': 'The edit-area mask is invalid. Use a same-size PNG with transparent edit areas.',
+    'generation_busy': 'Another image is being generated. Please try again when it is complete.',
+    'empty_image_response': 'The image service did not return an image. Please try again.',
+    'generation_failed': 'Image generation failed. Please try again shortly.',
+    'generation_timeout': 'Image generation timed out. Try again or choose a lower resolution.',
+    'provider_rate_limited': 'The image service is busy or out of quota. Please try again later.',
+    'copilot_unavailable': 'Greenie requires a configured Google API key.',
+    'json_invalid': 'The request body must be a JSON object.',
+    'chat_fields_required': 'session_id and message are required.',
+    'session_id_invalid': 'The session_id format is invalid.',
+    'message_too_long': f'The message cannot exceed {MAX_CHAT_CHARS} characters.',
+    'session_expired': 'This co-design session does not exist or has expired. Generate a new image to continue.',
+    'session_busy': 'This co-design session is still processing the previous request.',
+    'refinement_failed': 'The image refinement failed. Please try again shortly.',
+    'rate_limited': 'Too many requests. Please wait before trying again.',
+    'not_found': 'This API route was not found.',
+    'method_not_allowed': 'This request method is not supported.',
+    'payload_too_large': 'The upload is too large. Reduce the image size and try again.',
+    'internal_error': 'The server encountered an unexpected error. Please try again later.',
+    'openai_timeout': 'OpenAI image generation timed out. Try 1K or 2K and retry.',
+    'openai_auth_failed': 'The OpenAI API key is invalid or revoked. Update it on the server.',
+    'openai_access_denied': 'This OpenAI project cannot currently use GPT Image. Check model access and organization verification.',
+    'openai_rate_limited': 'The OpenAI image quota is exhausted or busy. Check usage and try again later.',
+    'openai_moderation_blocked': 'The image or description did not pass the OpenAI safety check. Revise it and try again.',
+    'openai_request_invalid': 'OpenAI could not process these image settings. Try 2K or adjust the image.',
+    'openai_upstream_error': 'The OpenAI image service is temporarily unavailable.',
+    'video_unavailable': 'Google Veo is not configured on the server.',
+    'video_payload_invalid': 'The video request must be a JSON object.',
+    'video_settings_invalid': 'Choose a supported duration, pace, and format.',
+    'video_versions_invalid': 'Choose 3 to 5 different image versions for a connected video.',
+    'video_version_invalid': 'This image version is no longer available. Select a recent version.',
+    'video_job_not_found': 'This video job does not exist or has expired.',
+    'video_generation_failed': 'Google Veo could not generate this video. Please try again later.',
+    'video_result_missing': 'Google Veo completed without returning a video.',
+    'video_storage_failed': 'The completed video could not be saved.',
+    'gallery_payload_invalid': 'The gallery request must be a JSON object.',
+    'gallery_consent_required': 'Confirm that you want to publish this generated image.',
+    'gallery_caption_too_long': f'The caption cannot exceed {MAX_GALLERY_CAPTION_CHARS} characters.',
+    'gallery_version_invalid': 'This generated image is no longer available. Choose a recent version.',
+    'gallery_post_not_found': 'This shared street design does not exist.',
+    'gallery_visitor_invalid': 'This browser could not be identified for feedback. Refresh and try again.',
+    'gallery_storage_failed': 'The shared street design could not be saved. Please try again.',
+}
+
+
+def _request_language():
+    header = request.headers.get('X-UI-Language', '')
+    if header:
+        return normalize_language(header)
+    query_language = request.args.get('language', '')
+    if query_language:
+        return normalize_language(query_language)
+    try:
+        form_language = request.form.get('ui_language', '')
+        if form_language:
+            return normalize_language(form_language)
+    except HTTPException:
+        pass
+    try:
+        payload = request.get_json(silent=True)
+    except HTTPException:
+        payload = None
+    if isinstance(payload, dict):
+        return normalize_language(payload.get('language'))
+    return 'zh-TW'
+
+
 def _api_error(message, status, code, retry_after=None):
+    language = _request_language()
+    if language == 'en':
+        message = EN_API_ERRORS.get(code, message)
     payload = {
         'error': message,
         'code': code,
+        'language': language,
         'request_id': getattr(g, 'request_id', None),
     }
     response = jsonify(payload)
@@ -1151,6 +1740,60 @@ def _api_error(message, status, code, retry_after=None):
     if retry_after is not None:
         response.headers['Retry-After'] = str(retry_after)
     return response
+
+
+def _openai_generation_error(error):
+    status = getattr(error, 'status_code', None)
+    code = getattr(error, 'code', None)
+    body = getattr(error, 'body', None)
+    if isinstance(body, dict):
+        code = code or body.get('code')
+
+    if 'timeout' in error.__class__.__name__.lower():
+        return _api_error(
+            'OpenAI 圖像生成逾時，請改用 1K 或 2K 後再試。',
+            504,
+            'openai_timeout',
+        )
+    if status == 401:
+        return _api_error(
+            'OpenAI API Key 無效或已撤銷，請在 Render 更新金鑰。',
+            503,
+            'openai_auth_failed',
+        )
+    if status == 403:
+        return _api_error(
+            'OpenAI 專案目前無法使用 GPT Image；請檢查模型權限與組織驗證。',
+            503,
+            'openai_access_denied',
+        )
+    if status == 429:
+        return _api_error(
+            'OpenAI 圖像額度不足或請求過多，請檢查專案用量後稍候再試。',
+            429,
+            'openai_rate_limited',
+            retry_after=60,
+        )
+    if status == 400 and code == 'moderation_blocked':
+        return _api_error(
+            '這次圖片或描述未通過 OpenAI 安全檢查，請調整描述後再試。',
+            400,
+            'openai_moderation_blocked',
+        )
+    if status == 400:
+        return _api_error(
+            'OpenAI 無法處理這組圖片設定，請改用 2K 或調整圖片後再試。',
+            400,
+            'openai_request_invalid',
+        )
+    if status and status >= 500:
+        return _api_error(
+            'OpenAI 圖像服務暫時無法回應，請稍後再試。',
+            502,
+            'openai_upstream_error',
+            retry_after=30,
+        )
+    return None
 
 
 def _check_rate_limit(scope, limit, window_seconds):
@@ -1225,7 +1868,7 @@ def _finish_request(response):
     response.headers['X-Request-ID'] = getattr(g, 'request_id', '')
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-    if request.path.startswith('/api/'):
+    if request.path == '/' or request.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
     elapsed = (time.monotonic() - getattr(
         g, 'request_started', time.monotonic())) * 1000
@@ -1243,6 +1886,75 @@ def index():
         image_providers=providers,
         default_provider=default_provider,
     )
+
+
+@app.route('/gallery')
+def gallery_page():
+    return render_template('gallery.html')
+
+
+def _preferences_from_payload(payload):
+    if not isinstance(payload, dict):
+        return normalize_preferences({})
+    nested = payload.get('design_preferences')
+    if isinstance(nested, dict):
+        return normalize_preferences(nested)
+    return normalize_preferences(payload)
+
+
+@app.route('/api/design-plan', methods=['POST'])
+def create_design_plan():
+    """Retrieve a small, reviewable set of street-design evidence."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _api_error(
+            '設計計畫需要 JSON 格式的需求。',
+            400,
+            'design_plan_invalid',
+        )
+    custom_prompt = str(payload.get('custom_prompt') or '').strip()
+    preset_id = str(payload.get('preset_id') or '').strip()
+    language = normalize_language(payload.get('language'))
+    if not custom_prompt:
+        return _api_error(
+            '請描述你想進行的街道改造。',
+            400,
+            'prompt_required',
+        )
+    if len(custom_prompt) > MAX_PROMPT_CHARS:
+        return _api_error(
+            f'改造描述不可超過 {MAX_PROMPT_CHARS} 個字元。',
+            400,
+            'prompt_too_long',
+        )
+    if preset_id and preset_id not in PRESET_STYLE_KEYS:
+        return _api_error(
+            '不支援的快捷改造選項。',
+            400,
+            'preset_invalid',
+        )
+    try:
+        spec = build_design_spec(
+            custom_prompt,
+            preset_id,
+            _preferences_from_payload(payload),
+            language=language,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        print(
+            f"[{g.request_id}] knowledge runtime unavailable: "
+            f"{e.__class__.__name__}: {e}"
+        )
+        return _api_error(
+            '街道設計知識庫暫時無法使用。',
+            503,
+            'knowledge_runtime_unavailable',
+        )
+    return jsonify({
+        'status': 'success',
+        'design_spec': public_design_spec(spec),
+        'generation_prompt': compile_generation_prompt(spec),
+    })
 
 
 @app.route('/health')
@@ -1310,6 +2022,15 @@ def diag():
         'image_models': {
             'gemini': GEMINI_IMAGE_MODEL,
             'openai': OPENAI_IMAGE_MODEL,
+        },
+        'video': {
+            'available': bool(
+                client
+                and getattr(client.models, 'generate_videos', None)
+            ),
+            'model': VEO_VIDEO_MODEL,
+            'durations_seconds': [4, 6, 8],
+            'formats': ['16:9', '9:16'],
         },
         'session_ttl_seconds': SESSION_TTL_SECONDS,
         'text_models': {},
@@ -1426,6 +2147,8 @@ def transform_image():
     preset_id = (request.form.get('preset_id') or '').strip()
     resolution = request.form.get('resolution', '2K')
     provider = (request.form.get('provider') or 'gemini').strip().lower()
+    language = normalize_language(request.form.get('ui_language'))
+    raw_preferences = request.form.get('design_preferences') or '{}'
     if not custom_prompt:
         return _api_error(
             '請描述你想進行的街道改造。',
@@ -1459,6 +2182,16 @@ def transform_image():
         )
     if resolution not in ('1K', '2K', '4K'):
         resolution = '2K'
+    try:
+        design_preferences = normalize_preferences(
+            json.loads(raw_preferences)
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return _api_error(
+            '街道情境設定格式不正確，請重新確認設計計畫。',
+            400,
+            'design_preferences_invalid',
+        )
 
     if not file or file.filename == '':
         return _api_error(
@@ -1477,94 +2210,37 @@ def transform_image():
     except ValueError as e:
         return _api_error(str(e), 400, 'image_invalid')
     
-    # Load Taiwan human-centered street design knowledge (curated markdown).
-    # Style intro + the english "quick reference card" go into the prompt;
-    # the negative-cue section gets merged into negative_prompt below.
-    kb_style_intro, kb_positive_cues, kb_negative_cues = load_taiwan_knowledge()
-    knowledge_context_parts = []
-    if kb_style_intro:
-        knowledge_context_parts.append("[Overall Taiwan Street Style]\n" + kb_style_intro)
-    if kb_positive_cues:
-        knowledge_context_parts.append("[Concrete Visual Rules]\n" + kb_positive_cues)
-    knowledge_context = "\n\n".join(knowledge_context_parts)
-    
-    # Try to match specific Design Prompt from Libraries
-    # (Checking against keys in our new dictionaries)
-    specialized_prompt = None
-    negative_prompt = None
-    
-    # Import locally to avoid top-level path issues if file missing
+    mask_bytes = None
+    mask_file = request.files.get('mask')
+    if mask_file and mask_file.filename:
+        try:
+            mask_bytes = _validate_edit_mask(mask_file, image_bytes)
+        except ValueError as e:
+            return _api_error(str(e), 400, 'mask_invalid')
+
     try:
-        knowledge_path = os.path.join(app.root_path, 'knowledge_base')
-        if knowledge_path not in sys.path:
-            sys.path.append(knowledge_path)
-        from street_prompt_data_taiwan import get_taiwan_design_prompt
-        from street_prompt_data_full import get_set_design_prompt
-        
-        # Check if custom_prompt matches a key (exact or partial)
-        # For this demo, let's assume the user might type the exact key or we use the specific logic
-        # Ideally, frontend would send a 'style_key'
-        
-        # Let's try to match strict keys first, or use the custom prompt as is
-        # If the user selected a preset from UI, it might be in 'prompt_type' or 'custom_prompt'
-        # The current UI sends 'custom_prompt' as the main text.
-        
-        # We will try to see if the custom_prompt *is* a key in our dictionaries
-        option_key = PRESET_STYLE_KEYS.get(preset_id, custom_prompt)
-        p1, np1 = get_taiwan_design_prompt(option_key, custom_prompt)
-        if p1:
-            specialized_prompt = p1
-            negative_prompt = np1
-        else:
-            p2, np2 = get_set_design_prompt(option_key, custom_prompt)
-            if p2:
-                specialized_prompt = p2
-                negative_prompt = np2
-                
-    except ImportError as e:
-        print(f"Could not import prompt libraries: {e}")
+        design_spec = build_design_spec(
+            custom_prompt,
+            preset_id,
+            design_preferences,
+            language=language,
+        )
+        full_prompt = compile_generation_prompt(design_spec)
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        print(
+            f"[{g.request_id}] knowledge runtime unavailable: "
+            f"{e.__class__.__name__}: {e}"
+        )
+        return _api_error(
+            '街道設計知識庫暫時無法使用。',
+            503,
+            'knowledge_runtime_unavailable',
+        )
 
-    # Merge curated Taiwan negative cues into whatever negative_prompt the
-    # preset matcher produced (if any). Preset wins on top, KB cues append.
-    if kb_negative_cues:
-        if negative_prompt:
-            negative_prompt = f"{negative_prompt}\n{kb_negative_cues}"
-        else:
-            negative_prompt = kb_negative_cues
-
-    # Construct prompt
-    if specialized_prompt:
-        # Use the highly structured specialized prompt
-        full_prompt = specialized_prompt
-        if knowledge_context:
-             full_prompt += f"\n\n[Additional Context from Knowledge Base Files]:\n{knowledge_context}"
-    else:
-        # Fallback to the generic robust prompt (Role -> User -> Context -> Style)
-        full_prompt = f"""
-        ## ROLE
-        You are an expert AI Urban Planner and Street Designer specialized in transforming street views.
-
-        ## USER REQUEST (PRIMARY GOAL - MANDATORY)
-        The user wants to transform this street view with the following specific vision:
-        "{custom_prompt if custom_prompt else "Modern city street transformation"}"
-        
-        CRITICAL INSTRUCTION: You MUST prioritize this User Request above all else. If they ask for a specific element (e.g., "bike lane"), it MUST be visible.
-
-        ## DESIGN GUIDELINES (CONTEXT - REFERENCE)
-        Use the following principles from the knowledge base to guide the details of your design:
-        --------------------------------------------------
-        {knowledge_context if knowledge_context else "No specific guidelines provided."}
-        --------------------------------------------------
-
-        ## OUTPUT STYLE
-        - Photorealistic, high-resolution, architectural visualization.
-        - Natural lighting, realistic shadows and textures.
-        - The perspective must match the original image exactly.
-        """
-    
     print(
         f"[{g.request_id}] prompt ready "
-        f"(provider={provider}, chars={len(full_prompt)})"
+        f"(provider={provider}, evidence={len(design_spec['evidence'])}, "
+        f"chars={len(full_prompt)}, mask={bool(mask_bytes)})"
     )
 
     try:
@@ -1589,9 +2265,6 @@ CRITICAL INSTRUCTIONS:
 
 The result should look like the same street, same buildings, same view - just with the requested street changes applied."""
 
-        if negative_prompt:
-            prompt_text += f"\n\nDO NOT include: {negative_prompt}"
-
         if not GEN_LOCK.acquire(blocking=False):
             return _api_error(
                 '另一張圖正在生成中，免費主機一次只能畫一張——等它畫完再試一次 🌱',
@@ -1612,6 +2285,7 @@ The result should look like the same street, same buildings, same view - just wi
                 prompt_text,
                 resolution=resolution,
                 provider=provider,
+                mask_bytes=mask_bytes,
             )
         finally:
             GEN_LOCK_HELD = False
@@ -1638,6 +2312,9 @@ The result should look like the same street, same buildings, same view - just wi
                 'versions': [version_meta],
                 'history': [],
                 'initial_prompt': custom_prompt or '',
+                'language': language,
+                'design_spec': public_design_spec(design_spec),
+                'audit': _pending_visual_audit(design_spec),
                 'resolution': resolution,
                 'provider': provider,
                 'version_count': 1,
@@ -1654,8 +2331,16 @@ The result should look like the same street, same buildings, same view - just wi
 
         # Ask 小綠 to write a greeting, reusing the already-shrunk copy
         greeting = _generate_copilot_greeting(
-            version_meta['bytes'], version_meta.get('mime_type', 'image/jpeg'), custom_prompt or '')
+            version_meta['bytes'],
+            version_meta.get('mime_type', 'image/jpeg'),
+            custom_prompt or '',
+            design_spec,
+        )
         with SESSIONS_LOCK:
+            SESSIONS[session_id]['audit'] = greeting.get(
+                'audit',
+                _pending_visual_audit(design_spec),
+            )
             _append_history_locked(
                 SESSIONS[session_id],
                 'assistant',
@@ -1670,6 +2355,13 @@ The result should look like the same street, same buildings, same view - just wi
             'version': 1,
             'image_url': generated_url,
             'provider': provider,
+            'language': language,
+            'mask_applied': bool(mask_bytes),
+            'design_spec': public_design_spec(design_spec),
+            'audit': greeting.get(
+                'audit',
+                _pending_visual_audit(design_spec),
+            ),
             'copilot': {
                 'message': greeting['message'],
                 'suggestions': greeting['suggestions'],
@@ -1677,10 +2369,16 @@ The result should look like the same street, same buildings, same view - just wi
         })
 
     except Exception as e:
+        upstream_request_id = getattr(e, 'request_id', None)
         print(
             f"[{g.request_id}] image generation failed with {provider}: "
-            f"{e.__class__.__name__}: {e}"
+            f"{e.__class__.__name__}: {e}; "
+            f"upstream_request_id={upstream_request_id or '-'}"
         )
+        if provider == 'openai':
+            openai_error = _openai_generation_error(e)
+            if openai_error is not None:
+                return openai_error
         upstream_status = getattr(e, 'status_code', None)
         if upstream_status == 429:
             return _api_error(
@@ -1757,6 +2455,11 @@ def chat_with_copilot():
             404,
             'session_expired',
         )
+    requested_language = (
+        normalize_language(data.get('language'))
+        if data.get('language')
+        else None
+    )
 
     operation_handle = _acquire_session_operation(session_id, session)
     if not operation_handle:
@@ -1768,6 +2471,8 @@ def chat_with_copilot():
         )
     try:
         session = _refresh_persisted_session(session_id, session)
+        if requested_language:
+            session['language'] = requested_language
         return _chat_with_session(session_id, session, user_message)
     finally:
         _persist_session(session_id, session)
@@ -1776,6 +2481,7 @@ def chat_with_copilot():
 
 def _chat_with_session(session_id, session, user_message):
     global GEN_LOCK_HELD
+    language = normalize_language(session.get('language'))
     latest = session['versions'][-1]
     latest_bytes = latest['bytes']
     mime_type = latest.get('mime_type', 'image/png')
@@ -1785,32 +2491,43 @@ def _chat_with_session(session_id, session, user_message):
         _append_history_locked(session, 'user', user_message)
         history_snapshot = list(session['history'])
 
-    decision = _decide_copilot_response(history_snapshot, latest_bytes, mime_type, user_message)
+    decision = _decide_copilot_response(
+        history_snapshot,
+        latest_bytes,
+        mime_type,
+        user_message,
+        language,
+    )
 
     result = {
         'status': 'success',
         'session_id': session_id,
+        'language': language,
         'intent': decision['intent'],
         'message': decision['message'],
         'suggestions': decision['suggestions'],
+        'design_spec': session.get('design_spec') or {},
+        'audit': session.get('audit') or {},
     }
 
     if decision['intent'] == 'refine' and decision['refine_prompt']:
         refine_prompt = decision['refine_prompt']
-        original_prompt = session.get('initial_prompt') or ''
-        full_prompt = f"""Apply the following refinement to this street view image.
-
-USER'S NEW REQUEST (HIGHEST PRIORITY):
-{refine_prompt}
-
-ORIGINAL VISION (context only):
-{original_prompt or 'Improve the street design.'}
-
-CRITICAL INSTRUCTIONS:
-- PRESERVE all buildings, architecture, facades exactly
-- PRESERVE camera perspective and viewpoint exactly
-- ONLY adjust street-level elements as instructed
-- Photorealistic quality, consistent lighting"""
+        current_spec = session.get('design_spec')
+        if not isinstance(current_spec, dict) or not current_spec:
+            current_spec = build_design_spec(
+                session.get('initial_prompt')
+                or (
+                    'Improve the people-first street environment'
+                    if language == 'en'
+                    else '改善街道人本環境'
+                ),
+                language=language,
+            )
+        updated_spec = refine_design_spec(current_spec, refine_prompt)
+        full_prompt = compile_generation_prompt(
+            updated_spec,
+            refinement_text=refine_prompt,
+        )
         if not GEN_LOCK.acquire(blocking=False):
             return _api_error(
                 '另一張圖正在生成中，請等它完成後再調整。',
@@ -1857,9 +2574,16 @@ CRITICAL INSTRUCTIONS:
             version_num,
             new_image_bytes,
         )
+        audit = _audit_generated_design(
+            new_meta['bytes'],
+            new_meta.get('mime_type', 'image/jpeg'),
+            updated_spec,
+        )
         with SESSIONS_LOCK:
             session['version_count'] = version_num
             session['versions'].append(new_meta)
+            session['design_spec'] = public_design_spec(updated_spec)
+            session['audit'] = audit
             if len(session['versions']) > MAX_SESSION_VERSIONS:
                 del session['versions'][:-MAX_SESSION_VERSIONS]
             _append_history_locked(
@@ -1870,6 +2594,8 @@ CRITICAL INSTRUCTIONS:
         result.update({
             'image_url': new_url,
             'version': version_num,
+            'design_spec': public_design_spec(updated_spec),
+            'audit': audit,
         })
     else:
         with SESSIONS_LOCK:
@@ -1880,6 +2606,880 @@ CRITICAL INSTRUCTIONS:
             )
 
     return jsonify(result)
+
+
+def _video_source_version(session, requested_version):
+    """Return retained image metadata for an absolute co-design version."""
+    versions = session.get('versions', [])
+    version_count = int(session.get('version_count') or len(versions))
+    first_retained = max(1, version_count - len(versions) + 1)
+    for offset, version in enumerate(versions):
+        absolute_version = int(
+            version.get('version') or first_retained + offset
+        )
+        if absolute_version == requested_version:
+            return version
+    return None
+
+
+def _gallery_post_key(post_id):
+    return f'{GALLERY_POST_KEY_PREFIX}:{post_id}'
+
+
+def _gallery_source_key(source_fingerprint):
+    return f'{GALLERY_SOURCE_KEY_PREFIX}:{source_fingerprint}'
+
+
+def _gallery_like_key(post_id):
+    return f'{GALLERY_LIKE_KEY_PREFIX}:{post_id}'
+
+
+def _redis_text(value):
+    if isinstance(value, bytes):
+        return value.decode('utf-8')
+    return str(value or '')
+
+
+def _gallery_post_from_mapping(mapping):
+    if not mapping:
+        return None
+    decoded = {
+        _redis_text(key): _redis_text(value)
+        for key, value in mapping.items()
+    }
+    post_id = decoded.get('id', '')
+    if not re.fullmatch(r'[a-f0-9]{16}', post_id):
+        return None
+    try:
+        return {
+            'id': post_id,
+            'image_url': decoded.get('image_url', ''),
+            'caption': decoded.get('caption', ''),
+            'design_label': decoded.get('design_label', ''),
+            'street_context': decoded.get('street_context', ''),
+            'language': normalize_language(decoded.get('language')),
+            'version': max(1, int(decoded.get('version') or 1)),
+            'created_at': float(decoded.get('created_at') or 0),
+            'likes': max(0, int(decoded.get('likes') or 0)),
+            'source_fingerprint': decoded.get('source_fingerprint', ''),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
+def _public_gallery_post(post):
+    return {
+        key: post[key]
+        for key in (
+            'id',
+            'image_url',
+            'caption',
+            'design_label',
+            'street_context',
+            'language',
+            'version',
+            'created_at',
+            'likes',
+        )
+    }
+
+
+def _prune_redis_gallery():
+    count = int(redis_client.zcard(GALLERY_INDEX_KEY))
+    excess = count - MAX_GALLERY_POSTS
+    if excess <= 0:
+        return
+    oldest_ids = redis_client.zrange(GALLERY_INDEX_KEY, 0, excess - 1)
+    if not oldest_ids:
+        return
+    post_ids = [_redis_text(value) for value in oldest_ids]
+    pipeline = redis_client.pipeline()
+    for post_id in post_ids:
+        pipeline.hget(
+            _gallery_post_key(post_id),
+            'source_fingerprint',
+        )
+    source_fingerprints = pipeline.execute()
+    pipeline = redis_client.pipeline()
+    for post_id, source_fingerprint in zip(
+        post_ids,
+        source_fingerprints,
+    ):
+        pipeline.delete(
+            _gallery_post_key(post_id),
+            _gallery_like_key(post_id),
+        )
+        if source_fingerprint:
+            pipeline.delete(
+                _gallery_source_key(_redis_text(source_fingerprint))
+            )
+    pipeline.zrem(GALLERY_INDEX_KEY, *post_ids)
+    pipeline.execute()
+
+
+def _create_gallery_post(post, source_fingerprint):
+    """Persist one idempotent gallery post and return (post, created)."""
+    if redis_client:
+        source_key = _gallery_source_key(source_fingerprint)
+        try:
+            existing_id = redis_client.get(source_key)
+            if existing_id:
+                existing = _gallery_post_from_mapping(
+                    redis_client.hgetall(
+                        _gallery_post_key(_redis_text(existing_id))
+                    )
+                )
+                if existing:
+                    return existing, False
+                redis_client.delete(source_key)
+
+            claimed = redis_client.set(
+                source_key,
+                post['id'],
+                nx=True,
+            )
+            if not claimed:
+                existing_id = redis_client.get(source_key)
+                existing = _gallery_post_from_mapping(
+                    redis_client.hgetall(
+                        _gallery_post_key(_redis_text(existing_id))
+                    )
+                )
+                if existing:
+                    return existing, False
+                raise RuntimeError('gallery source claim has no post')
+
+            stored = dict(post)
+            stored['source_fingerprint'] = source_fingerprint
+            pipeline = redis_client.pipeline()
+            pipeline.hset(
+                _gallery_post_key(post['id']),
+                mapping=stored,
+            )
+            pipeline.zadd(
+                GALLERY_INDEX_KEY,
+                {post['id']: post['created_at']},
+            )
+            pipeline.execute()
+            _prune_redis_gallery()
+            return stored, True
+        except Exception as error:
+            print(
+                'Redis gallery write failed; using local gallery '
+                f'({error.__class__.__name__})'
+            )
+
+    with GALLERY_LOCK:
+        existing_id = GALLERY_SOURCE_IDS.get(source_fingerprint)
+        if existing_id and existing_id in GALLERY_POSTS:
+            return dict(GALLERY_POSTS[existing_id]), False
+        stored = dict(post)
+        stored['source_fingerprint'] = source_fingerprint
+        GALLERY_POSTS[post['id']] = stored
+        GALLERY_SOURCE_IDS[source_fingerprint] = post['id']
+        GALLERY_VOTES.setdefault(post['id'], set())
+        while len(GALLERY_POSTS) > MAX_GALLERY_POSTS:
+            oldest_id = min(
+                GALLERY_POSTS,
+                key=lambda item_id: GALLERY_POSTS[item_id]['created_at'],
+            )
+            removed = GALLERY_POSTS.pop(oldest_id)
+            GALLERY_SOURCE_IDS.pop(
+                removed.get('source_fingerprint', ''),
+                None,
+            )
+            GALLERY_VOTES.pop(oldest_id, None)
+        return dict(stored), True
+
+
+def _list_gallery_posts(sort_order, limit):
+    posts = None
+    if redis_client:
+        try:
+            post_ids = [
+                _redis_text(value)
+                for value in redis_client.zrevrange(
+                    GALLERY_INDEX_KEY,
+                    0,
+                    MAX_GALLERY_POSTS - 1,
+                )
+            ]
+            pipeline = redis_client.pipeline()
+            for post_id in post_ids:
+                pipeline.hgetall(_gallery_post_key(post_id))
+            posts = [
+                post
+                for post in map(
+                    _gallery_post_from_mapping,
+                    pipeline.execute(),
+                )
+                if post
+            ]
+        except Exception as error:
+            print(
+                'Redis gallery read failed; using local gallery '
+                f'({error.__class__.__name__})'
+            )
+            posts = None
+    if posts is None:
+        with GALLERY_LOCK:
+            posts = [dict(post) for post in GALLERY_POSTS.values()]
+
+    if sort_order == 'popular':
+        posts.sort(
+            key=lambda post: (post['likes'], post['created_at']),
+            reverse=True,
+        )
+    else:
+        posts.sort(key=lambda post: post['created_at'], reverse=True)
+    return {
+        'items': [
+            _public_gallery_post(post)
+            for post in posts[:limit]
+        ],
+        'stats': {
+            'works': len(posts),
+            'likes': sum(post['likes'] for post in posts),
+        },
+    }
+
+
+def _like_gallery_post(post_id, voter_hash):
+    if redis_client:
+        try:
+            post_key = _gallery_post_key(post_id)
+            if not redis_client.exists(post_key):
+                return None
+            added = bool(
+                redis_client.sadd(
+                    _gallery_like_key(post_id),
+                    voter_hash,
+                )
+            )
+            if added:
+                likes = int(redis_client.hincrby(post_key, 'likes', 1))
+            else:
+                likes = int(redis_client.hget(post_key, 'likes') or 0)
+            return {'likes': likes, 'new_like': added}
+        except Exception as error:
+            print(
+                'Redis gallery feedback failed; using local gallery '
+                f'({error.__class__.__name__})'
+            )
+
+    with GALLERY_LOCK:
+        post = GALLERY_POSTS.get(post_id)
+        if not post:
+            return None
+        voters = GALLERY_VOTES.setdefault(post_id, set())
+        added = voter_hash not in voters
+        if added:
+            voters.add(voter_hash)
+            post['likes'] += 1
+        return {'likes': post['likes'], 'new_like': added}
+
+
+@app.route('/api/gallery', methods=['GET'])
+def list_gallery():
+    sort_order = request.args.get('sort', 'latest')
+    if sort_order not in {'latest', 'popular'}:
+        sort_order = 'latest'
+    try:
+        limit = int(request.args.get('limit', 24))
+    except (TypeError, ValueError):
+        limit = 24
+    limit = min(MAX_GALLERY_PAGE_SIZE, max(1, limit))
+    result = _list_gallery_posts(sort_order, limit)
+    result.update({'status': 'success', 'sort': sort_order})
+    return jsonify(result)
+
+
+@app.route('/api/gallery', methods=['POST'])
+def publish_gallery_post():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _api_error(
+            '成果牆發布資料需要 JSON 格式。',
+            400,
+            'gallery_payload_invalid',
+        )
+    if payload.get('consent') is not True:
+        return _api_error(
+            '請先確認你願意公開這張生成成果。',
+            400,
+            'gallery_consent_required',
+        )
+    caption = str(payload.get('caption') or '').strip()
+    if len(caption) > MAX_GALLERY_CAPTION_CHARS:
+        return _api_error(
+            f'作品說明不可超過 {MAX_GALLERY_CAPTION_CHARS} 個字元。',
+            400,
+            'gallery_caption_too_long',
+        )
+    session_id = str(payload.get('session_id') or '')
+    if not re.fullmatch(r'[a-f0-9]{12}', session_id):
+        return _api_error(
+            'session_id 格式不正確。',
+            400,
+            'session_id_invalid',
+        )
+    version = payload.get('version')
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        return _api_error(
+            '請選擇一張仍可使用的生成成果。',
+            400,
+            'gallery_version_invalid',
+        )
+    limit_response = _check_rate_limit(
+        'gallery_publish',
+        8,
+        24 * 60 * 60,
+    )
+    if limit_response:
+        return limit_response
+
+    session = _get_session(session_id)
+    if not session:
+        return _api_error(
+            '這個共創階段不存在或已過期，請重新生成圖片。',
+            404,
+            'session_expired',
+        )
+    source = _video_source_version(session, version)
+    if not source or not source.get('url'):
+        return _api_error(
+            '這張生成成果已不在可用版本中，請選擇較新的版本。',
+            404,
+            'gallery_version_invalid',
+        )
+
+    now = time.time()
+    spec = session.get('design_spec')
+    if not isinstance(spec, dict):
+        spec = {}
+    language = normalize_language(
+        session.get('language') or spec.get('language')
+    )
+    post = {
+        'id': uuid.uuid4().hex[:16],
+        'image_url': str(source['url']),
+        'caption': caption,
+        'design_label': str(spec.get('design_label') or ''),
+        'street_context': str(spec.get('street_context_label') or ''),
+        'language': language,
+        'version': version,
+        'created_at': now,
+        'likes': 0,
+    }
+    source_fingerprint = hashlib.sha256(
+        f'{session_id}:{version}'.encode()
+    ).hexdigest()
+    try:
+        stored, created = _create_gallery_post(
+            post,
+            source_fingerprint,
+        )
+    except Exception as error:
+        print(
+            f'[{g.request_id}] gallery storage failed: '
+            f'{error.__class__.__name__}: {error}'
+        )
+        return _api_error(
+            '目前無法儲存這張生成成果，請稍後再試。',
+            503,
+            'gallery_storage_failed',
+        )
+    return jsonify({
+        'status': 'success',
+        'post': _public_gallery_post(stored),
+        'created': created,
+        'gallery_url': url_for('gallery_page'),
+    }), 201 if created else 200
+
+
+@app.route('/api/gallery/<post_id>/like', methods=['POST'])
+def like_gallery_post(post_id):
+    if not re.fullmatch(r'[a-f0-9]{16}', post_id):
+        return _api_error(
+            '找不到這個街景成果。',
+            404,
+            'gallery_post_not_found',
+        )
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _api_error(
+            '成果牆回饋資料需要 JSON 格式。',
+            400,
+            'gallery_payload_invalid',
+        )
+    visitor_token = str(payload.get('visitor_token') or '')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{16,80}', visitor_token):
+        return _api_error(
+            '無法辨識這次回饋，請重新整理後再試。',
+            400,
+            'gallery_visitor_invalid',
+        )
+    limit_response = _check_rate_limit(
+        'gallery_like',
+        120,
+        60 * 60,
+    )
+    if limit_response:
+        return limit_response
+    voter_hash = hashlib.sha256(
+        f'{post_id}:{visitor_token}'.encode()
+    ).hexdigest()
+    result = _like_gallery_post(post_id, voter_hash)
+    if result is None:
+        return _api_error(
+            '找不到這個街景成果。',
+            404,
+            'gallery_post_not_found',
+        )
+    return jsonify({
+        'status': 'success',
+        'liked': True,
+        **result,
+    })
+
+
+def _video_image(source):
+    return types.Image(
+        image_bytes=source['bytes'],
+        mime_type=source.get('mime_type', 'image/jpeg'),
+    )
+
+
+def _video_prompt(speed, versions=None):
+    pace = {
+        'gentle': (
+            'Move forward at a very slow, relaxed strolling pace with '
+            'subtle natural walking motion.'
+        ),
+        'natural': (
+            'Move forward at a natural pedestrian walking pace with smooth, '
+            'stable motion.'
+        ),
+        'brisk': (
+            'Move forward at a brisk walking pace while keeping the camera '
+            'stable and comfortable.'
+        ),
+    }[speed]
+    continuity = ''
+    if versions and len(versions) > 1:
+        version_path = ' -> '.join(f'v{version}' for version in versions)
+        continuity = (
+            ' Use the supplied first and last frames as fixed endpoints. '
+            f'Follow this intended progression: {version_path}. Smoothly connect '
+            'the street-design changes without sudden morphing or cuts.'
+        )
+    return (
+        'Create a photorealistic first-person pedestrian walk-through from '
+        'this redesigned street image. Keep an eye-level camera on the '
+        'sidewalk and travel naturally forward into the scene. '
+        f'{pace}{continuity} Preserve the exact street design, building geometry, '
+        'storefronts, trees, lanes, street furniture, signs, lighting, and '
+        'perspective shown in the reference. Use continuous stabilized camera '
+        'movement, realistic parallax, and subtle urban ambience. No cuts, no '
+        'camera rotation, no dramatic zoom, no new design elements, no close-up '
+        'or identifiable people, no dialogue, and no music.'
+    )
+
+
+def _concatenate_video_segments(segment_bytes):
+    """Join compatible Veo MP4 segments without recompressing them."""
+    if len(segment_bytes) == 1:
+        return segment_bytes[0]
+    if not 2 <= len(segment_bytes) <= 4:
+        raise ValueError('expected 2 to 4 video segments')
+    ffmpeg_executable = imageio_ffmpeg.get_ffmpeg_exe()
+    with tempfile.TemporaryDirectory(prefix='street-video-') as temp_dir:
+        segment_paths = []
+        for index, video_bytes in enumerate(segment_bytes):
+            if not video_bytes:
+                raise ValueError('video segment is empty')
+            path = os.path.join(temp_dir, f'segment-{index}.mp4')
+            with open(path, 'wb') as output:
+                output.write(video_bytes)
+            segment_paths.append(path)
+        concat_path = os.path.join(temp_dir, 'segments.ffconcat')
+        with open(concat_path, 'w', encoding='utf-8') as manifest:
+            manifest.write('ffconcat version 1.0\n')
+            for path in segment_paths:
+                escaped_path = path.replace("'", "'\\''")
+                manifest.write(f"file '{escaped_path}'\n")
+        output_path = os.path.join(temp_dir, 'street-walkthrough.mp4')
+        completed = subprocess.run(
+            [
+                ffmpeg_executable,
+                '-hide_banner',
+                '-loglevel',
+                'error',
+                '-f',
+                'concat',
+                '-safe',
+                '0',
+                '-i',
+                concat_path,
+                '-c',
+                'copy',
+                '-movflags',
+                '+faststart',
+                '-y',
+                output_path,
+            ],
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.decode('utf-8', errors='replace')[-1000:]
+            raise RuntimeError(f'ffmpeg concat failed: {detail}')
+        with open(output_path, 'rb') as output:
+            return output.read()
+
+
+def _public_video_job(job):
+    payload = {
+        'job_id': job['id'],
+        'status': job['status'],
+        'version': job['version'],
+        'versions': job.get('versions') or [job['version']],
+        'mode': job.get('mode') or 'single',
+        'speed': job['speed'],
+        'duration': job['duration'],
+        'total_duration': job.get('total_duration') or job['duration'],
+        'format': job['format'],
+        'aspect_ratio': job['aspect_ratio'],
+    }
+    if job.get('video_url'):
+        payload['video_url'] = job['video_url']
+    if job.get('error'):
+        payload['error'] = job['error']
+    return payload
+
+
+@app.route('/api/videos', methods=['POST'])
+def create_video():
+    """Start an asynchronous Google Veo image-to-video operation."""
+    rate_error = _check_rate_limit('video', MAX_VIDEOS_PER_DAY, 86_400)
+    if rate_error is not None:
+        return rate_error
+    if not client or not getattr(client.models, 'generate_videos', None):
+        return _api_error(
+            'Google Veo 尚未在伺服器設定完成。',
+            503,
+            'video_unavailable',
+        )
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _api_error(
+            '影片請求必須是 JSON 物件。',
+            400,
+            'video_payload_invalid',
+        )
+    session_id = str(data.get('session_id') or '').strip()
+    if not re.fullmatch(r'[a-f0-9]{12}', session_id):
+        return _api_error(
+            'session_id 格式無效。',
+            400,
+            'session_id_invalid',
+        )
+    mode = str(data.get('mode') or 'single')
+    try:
+        duration = int(data.get('duration'))
+    except (TypeError, ValueError):
+        return _api_error(
+            '請選擇支援的影片長度、步行節奏與畫面比例。',
+            400,
+            'video_settings_invalid',
+        )
+    if mode == 'sequence':
+        raw_versions = data.get('versions')
+        try:
+            video_versions = [
+                int(version)
+                for version in (
+                    raw_versions
+                    if isinstance(raw_versions, list)
+                    else []
+                )
+            ]
+        except (TypeError, ValueError):
+            video_versions = []
+        if (
+            len(video_versions) not in {3, 4, 5}
+            or len(set(video_versions)) != len(video_versions)
+            or any(version < 1 for version in video_versions)
+        ):
+            return _api_error(
+                '請選擇 3 到 5 個不同的圖片版本來製作連貫影片。',
+                400,
+                'video_versions_invalid',
+            )
+    elif mode == 'single':
+        try:
+            video_versions = [int(data.get('version'))]
+        except (TypeError, ValueError):
+            return _api_error(
+                '請選擇支援的影片長度、步行節奏與畫面比例。',
+                400,
+                'video_settings_invalid',
+            )
+    else:
+        return _api_error(
+            '請選擇支援的影片素材模式。',
+            400,
+            'video_settings_invalid',
+        )
+    speed = str(data.get('speed') or '')
+    video_format = str(data.get('format') or '')
+    if (
+        duration not in {4, 6, 8}
+        or (mode == 'sequence' and duration != 8)
+        or speed not in {'gentle', 'natural', 'brisk'}
+        or video_format not in {'landscape', 'portrait'}
+    ):
+        return _api_error(
+            '請選擇支援的影片長度、步行節奏與畫面比例。',
+            400,
+            'video_settings_invalid',
+        )
+
+    session = _get_session(session_id)
+    if not session:
+        return _api_error(
+            '共創工作階段不存在或已逾時，請重新生成一張圖片。',
+            404,
+            'session_expired',
+        )
+    operation_handle = _acquire_session_operation(session_id, session)
+    if not operation_handle:
+        return _api_error(
+            '這個共創工作階段正在處理上一個要求，請稍候。',
+            409,
+            'session_busy',
+            retry_after=5,
+        )
+
+    try:
+        session = _refresh_persisted_session(session_id, session)
+        sources = [
+            _video_source_version(session, version)
+            for version in video_versions
+        ]
+        if any(source is None for source in sources):
+            return _api_error(
+                '這個圖片版本已不在工作階段中，請選擇較新的版本。',
+                404,
+                'video_version_invalid',
+            )
+        aspect_ratio = '9:16' if video_format == 'portrait' else '16:9'
+        config_kwargs = {
+            'number_of_videos': 1,
+            'duration_seconds': duration,
+            'aspect_ratio': aspect_ratio,
+            'resolution': '720p',
+            'generate_audio': True,
+            'person_generation': 'allow_adult',
+            'enhance_prompt': True,
+            'negative_prompt': (
+                'warped buildings, morphing signs, jump cuts, camera shake, '
+                'new vehicles, close-up faces, children, duplicated objects, '
+                'text distortion'
+            ),
+        }
+        operation_names = []
+        if mode == 'sequence':
+            transitions = zip(
+                sources[:-1],
+                sources[1:],
+                video_versions[:-1],
+                video_versions[1:],
+            )
+        else:
+            transitions = [
+                (sources[0], None, video_versions[0], None)
+            ]
+        for first_source, last_source, first_version, last_version in transitions:
+            segment_config = dict(config_kwargs)
+            segment_versions = [first_version]
+            if last_source is not None:
+                segment_config['last_frame'] = _video_image(last_source)
+                segment_versions.append(last_version)
+            operation = client.models.generate_videos(
+                model=VEO_VIDEO_MODEL,
+                prompt=_video_prompt(speed, segment_versions),
+                image=_video_image(first_source),
+                config=types.GenerateVideosConfig(**segment_config),
+            )
+            operation_name = str(getattr(operation, 'name', '') or '')
+            if not operation_name:
+                raise RuntimeError('Veo did not return an operation name')
+            operation_names.append(operation_name)
+        now = time.time()
+        job_id = uuid.uuid4().hex[:16]
+        job = {
+            'id': job_id,
+            'operation_name': operation_names[0],
+            'operation_names': operation_names,
+            'status': 'queued',
+            'version': video_versions[-1],
+            'versions': video_versions,
+            'mode': mode,
+            'speed': speed,
+            'duration': duration,
+            'total_duration': (
+                duration * (len(video_versions) - 1)
+                if mode == 'sequence'
+                else duration
+            ),
+            'format': video_format,
+            'aspect_ratio': aspect_ratio,
+            'video_url': '',
+            'error': '',
+            'created_at': now,
+            'updated_at': now,
+        }
+        jobs = session.setdefault('video_jobs', {})
+        jobs[job_id] = job
+        while len(jobs) > MAX_VIDEO_JOBS_PER_SESSION:
+            oldest_id = min(
+                jobs,
+                key=lambda item: jobs[item].get('created_at', 0),
+            )
+            jobs.pop(oldest_id, None)
+        session['updated_at'] = now
+        return jsonify(_public_video_job(job)), 202
+    except Exception as error:
+        print(
+            f'[{g.request_id}] Veo create failed: '
+            f'{error.__class__.__name__}: {error}'
+        )
+        return _api_error(
+            'Google Veo 無法建立影片，請確認付費額度與模型權限後再試。',
+            502,
+            'video_generation_failed',
+            retry_after=30,
+        )
+    finally:
+        _persist_session(session_id, session)
+        _release_session_operation(operation_handle)
+
+
+@app.route('/api/videos/<job_id>', methods=['GET'])
+def get_video(job_id):
+    """Poll Veo and persist the completed MP4 exactly once."""
+    session_id = str(request.args.get('session_id') or '').strip()
+    if (
+        not re.fullmatch(r'[a-f0-9]{12}', session_id)
+        or not re.fullmatch(r'[a-f0-9]{16}', job_id)
+    ):
+        return _api_error(
+            '影片工作階段格式無效。',
+            400,
+            'session_id_invalid',
+        )
+    session = _get_session(session_id)
+    if not session:
+        return _api_error(
+            '共創工作階段不存在或已逾時，請重新生成一張圖片。',
+            404,
+            'session_expired',
+        )
+    operation_handle = _acquire_session_operation(session_id, session)
+    if not operation_handle:
+        return _api_error(
+            '影片狀態正在更新，請稍候再查詢。',
+            409,
+            'session_busy',
+            retry_after=3,
+        )
+
+    try:
+        session = _refresh_persisted_session(session_id, session)
+        job = session.get('video_jobs', {}).get(job_id)
+        if not job:
+            return _api_error(
+                '找不到這個影片任務，可能已經逾時。',
+                404,
+                'video_job_not_found',
+            )
+        if job['status'] in {'completed', 'failed'}:
+            return jsonify(_public_video_job(job))
+
+        operation_names = job.get('operation_names') or [
+            job['operation_name']
+        ]
+        operations = [
+            client.operations.get(
+                types.GenerateVideosOperation(name=operation_name)
+            )
+            for operation_name in operation_names
+        ]
+        now = time.time()
+        job['updated_at'] = now
+        operation_errors = [
+            getattr(operation, 'error', None)
+            for operation in operations
+            if getattr(operation, 'error', None)
+        ]
+        if operation_errors:
+            job['status'] = 'failed'
+            job['error'] = (
+                'Google Veo 無法完成這支影片，請調整設定後再試。'
+            )
+            session['updated_at'] = now
+            print(
+                f'[{g.request_id}] Veo operation failed: '
+                f'{operation_errors[0]}'
+            )
+            return jsonify(_public_video_job(job))
+        if not all(getattr(operation, 'done', False) for operation in operations):
+            job['status'] = 'in_progress'
+            session['updated_at'] = now
+            return jsonify(_public_video_job(job))
+
+        segment_bytes = []
+        for operation in operations:
+            response = getattr(operation, 'response', None)
+            generated_videos = (
+                getattr(response, 'generated_videos', None) or []
+            )
+            if not generated_videos:
+                job['status'] = 'failed'
+                job['error'] = 'Google Veo 完成任務，但沒有回傳影片。'
+                session['updated_at'] = now
+                return jsonify(_public_video_job(job))
+            video_file = generated_videos[0].video
+            downloaded = client.files.download(file=video_file)
+            if not downloaded:
+                raise RuntimeError('Veo video download was empty')
+            segment_bytes.append(downloaded)
+        video_bytes = _concatenate_video_segments(segment_bytes)
+        job['video_url'] = _save_generated_video(
+            session_id,
+            job_id,
+            video_bytes,
+        )
+        job['status'] = 'completed'
+        session['updated_at'] = now
+        return jsonify(_public_video_job(job))
+    except Exception as error:
+        print(
+            f'[{g.request_id}] Veo poll failed: '
+            f'{error.__class__.__name__}: {error}'
+        )
+        return _api_error(
+            '影片狀態暫時無法更新，系統會保留任務，請稍後再試。',
+            502,
+            'video_generation_failed',
+            retry_after=10,
+        )
+    finally:
+        _persist_session(session_id, session)
+        _release_session_operation(operation_handle)
 
 if __name__ == '__main__':
     app.run(

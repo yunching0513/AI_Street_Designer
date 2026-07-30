@@ -13,11 +13,24 @@ from knowledge_base.street_prompt_data_taiwan import get_taiwan_design_prompt
 def setup_function():
     street_app.SESSIONS.clear()
     street_app.RATE_LIMITS.clear()
+    street_app.GALLERY_POSTS.clear()
+    street_app.GALLERY_SOURCE_IDS.clear()
+    street_app.GALLERY_VOTES.clear()
 
 
-def make_png(width=1200, height=800):
+def make_png(width=1200, height=800, color='#6d806a'):
     output = io.BytesIO()
-    Image.new('RGB', (width, height), '#6d806a').save(output, format='PNG')
+    Image.new('RGB', (width, height), color).save(output, format='PNG')
+    return output.getvalue()
+
+
+def make_mask(width=1200, height=800):
+    output = io.BytesIO()
+    mask = Image.new('RGBA', (width, height), (255, 255, 255, 255))
+    for x in range(width // 4, width // 2):
+        for y in range(height // 2, height * 3 // 4):
+            mask.putpixel((x, y), (255, 255, 255, 0))
+    mask.save(output, format='PNG')
     return output.getvalue()
 
 
@@ -44,6 +57,172 @@ def test_index_renders_both_provider_choices(monkeypatch):
     assert b'value="gemini"' in response.data
     assert b'value="openai"' in response.data
     assert b'gpt-image-2' in response.data
+    assert b'data-preset-id="reduce-motor-traffic"' in response.data
+    assert '減少汽機車'.encode() in response.data
+    assert b'id="comparison-viewer"' in response.data
+    assert b'id="before-image"' in response.data
+    assert b'id="comparison-range"' in response.data
+    assert b'id="download-original-image"' in response.data
+    assert b'id="download-current-image"' in response.data
+    assert b'href="/gallery"' in response.data
+    assert b'id="gallery-publish-launcher"' in response.data
+    assert b'id="gallery-share-modal"' in response.data
+    assert b'id="gallery-share-consent"' in response.data
+    assert b'id="video-launcher"' in response.data
+    assert b'id="video-modal"' in response.data
+    assert b'name="video-speed"' in response.data
+    assert b'name="video-duration"' in response.data
+    assert b'name="video-format"' in response.data
+    assert b'name="video-source-mode"' in response.data
+    assert b'id="video-storyboard-panel"' in response.data
+    assert b'id="video-storyboard-options"' in response.data
+    assert b'id="video-status-card"' in response.data
+    assert b'name="video-duration" value="4"' in response.data
+    assert b'name="video-duration" value="6"' in response.data
+    assert b'name="video-duration" value="8"' in response.data
+    assert b'name="video-duration" value="16"' not in response.data
+    assert b'name="video-duration" value="20"' not in response.data
+    assert b'id="street-context"' in response.data
+    assert b'id="design-plan-panel"' in response.data
+    assert b'id="edit-mask-canvas"' in response.data
+    assert b'id="result-review"' in response.data
+    assert b'class="language-switch"' in response.data
+    assert b'data-language="zh-TW"' in response.data
+    assert b'data-language="en"' in response.data
+    assert b'data-i18n="loadingAccess"' in response.data
+    assert '開始生成影片'.encode() in response.data
+    assert response.headers['Cache-Control'] == 'no-store'
+
+
+def make_gallery_session(session_id, version=1, label='綠色生活街道'):
+    now = time.time()
+    street_app.SESSIONS[session_id] = {
+        'versions': [{
+            'version': version,
+            'url': f'/static/generated/{session_id}/v{version}.png',
+            'bytes': make_png(),
+            'mime_type': 'image/png',
+        }],
+        'history': [],
+        'initial_prompt': 'private source prompt',
+        'language': 'zh-TW',
+        'design_spec': {
+            'language': 'zh-TW',
+            'design_label': label,
+            'street_context_label': '住宅生活街道',
+        },
+        'version_count': version,
+        'created_at': now,
+        'updated_at': now,
+        '_operation_lock': threading.Lock(),
+    }
+    return session_id
+
+
+def test_gallery_page_renders_bilingual_feedback_shell():
+    response = street_app.app.test_client().get('/gallery')
+
+    assert response.status_code == 200
+    assert b'id="gallery-grid"' in response.data
+    assert b'id="gallery-work-count"' in response.data
+    assert b'data-sort="popular"' in response.data
+    assert '我喜歡這個街景設計！'.encode() in response.data
+    assert '原始上傳照片不會出現在成果牆'.encode() in response.data
+    assert b'href="/"' in response.data
+
+
+def test_gallery_publish_requires_explicit_consent(monkeypatch):
+    monkeypatch.setattr(street_app, 'redis_client', None)
+    session_id = make_gallery_session('aaaaaaaaaaaa')
+
+    response = street_app.app.test_client().post('/api/gallery', json={
+        'session_id': session_id,
+        'version': 1,
+        'caption': '安心步行',
+        'consent': False,
+    })
+
+    assert response.status_code == 400
+    assert response.get_json()['code'] == 'gallery_consent_required'
+    assert street_app.GALLERY_POSTS == {}
+
+
+def test_gallery_publish_exposes_only_generated_result(monkeypatch):
+    monkeypatch.setattr(street_app, 'redis_client', None)
+    session_id = make_gallery_session('aaaaaaaaaaaa')
+    client = street_app.app.test_client()
+
+    first = client.post('/api/gallery', json={
+        'session_id': session_id,
+        'version': 1,
+        'caption': '希望孩子每天都能安心走路',
+        'consent': True,
+    })
+    duplicate = client.post('/api/gallery', json={
+        'session_id': session_id,
+        'version': 1,
+        'caption': 'different caption should not create another post',
+        'consent': True,
+    })
+
+    assert first.status_code == 201
+    payload = first.get_json()
+    assert payload['created'] is True
+    assert payload['post']['image_url'].endswith('/v1.png')
+    assert payload['post']['design_label'] == '綠色生活街道'
+    assert payload['post']['street_context'] == '住宅生活街道'
+    assert 'source_fingerprint' not in payload['post']
+    assert 'session_id' not in payload['post']
+    assert 'private source prompt' not in first.get_data(as_text=True)
+    assert duplicate.status_code == 200
+    assert duplicate.get_json()['created'] is False
+    assert duplicate.get_json()['post']['id'] == payload['post']['id']
+    assert len(street_app.GALLERY_POSTS) == 1
+
+
+def test_gallery_feedback_is_deduplicated_and_sortable(monkeypatch):
+    monkeypatch.setattr(street_app, 'redis_client', None)
+    client = street_app.app.test_client()
+    first_session = make_gallery_session(
+        'aaaaaaaaaaaa',
+        label='第一個設計',
+    )
+    first = client.post('/api/gallery', json={
+        'session_id': first_session,
+        'version': 1,
+        'consent': True,
+    }).get_json()['post']
+
+    second_session = make_gallery_session(
+        'bbbbbbbbbbbb',
+        label='第二個設計',
+    )
+    second = client.post('/api/gallery', json={
+        'session_id': second_session,
+        'version': 1,
+        'consent': True,
+    }).get_json()['post']
+
+    visitor = 'browser_visitor_12345'
+    first_like = client.post(
+        f"/api/gallery/{first['id']}/like",
+        json={'visitor_token': visitor},
+    )
+    repeated_like = client.post(
+        f"/api/gallery/{first['id']}/like",
+        json={'visitor_token': visitor},
+    )
+    latest = client.get('/api/gallery?sort=latest').get_json()
+    popular = client.get('/api/gallery?sort=popular').get_json()
+
+    assert first_like.status_code == 200
+    assert first_like.get_json()['new_like'] is True
+    assert first_like.get_json()['likes'] == 1
+    assert repeated_like.get_json()['new_like'] is False
+    assert repeated_like.get_json()['likes'] == 1
+    assert latest['items'][0]['id'] == second['id']
+    assert popular['items'][0]['id'] == first['id']
+    assert popular['stats'] == {'works': 2, 'likes': 1}
 
 
 def test_every_homepage_preset_resolves_to_specialized_prompt():
@@ -60,14 +239,21 @@ def test_every_homepage_preset_resolves_to_specialized_prompt():
 def test_openai_settings_preserve_orientation_and_valid_multiples():
     landscape = make_png(1600, 900)
     portrait = make_png(900, 1600)
+    extra_wide = make_png(3000, 1000)
 
     landscape_size, landscape_quality = street_app._openai_image_settings(
-        landscape, '4K')
+        landscape, '1K')
     portrait_size, portrait_quality = street_app._openai_image_settings(
         portrait, '2K')
+    extra_wide_size, _ = street_app._openai_image_settings(
+        extra_wide, '1K')
 
     landscape_width, landscape_height = map(int, landscape_size.split('x'))
     portrait_width, portrait_height = map(int, portrait_size.split('x'))
+    extra_wide_width, extra_wide_height = map(
+        int,
+        extra_wide_size.split('x'),
+    )
     assert landscape_width > landscape_height
     assert portrait_height > portrait_width
     assert all(
@@ -77,10 +263,44 @@ def test_openai_settings_preserve_orientation_and_valid_multiples():
             landscape_height,
             portrait_width,
             portrait_height,
+            extra_wide_width,
+            extra_wide_height,
         )
     )
-    assert landscape_quality == 'high'
+    assert all(
+        street_app.OPENAI_MIN_IMAGE_PIXELS <= width * height
+        <= street_app.OPENAI_MAX_IMAGE_PIXELS
+        for width, height in (
+            (landscape_width, landscape_height),
+            (portrait_width, portrait_height),
+            (extra_wide_width, extra_wide_height),
+        )
+    )
+    assert extra_wide_width / extra_wide_height <= 3
+    assert landscape_quality == 'low'
     assert portrait_quality == 'medium'
+
+
+def test_openai_errors_are_user_actionable():
+    cases = [
+        (401, None, 503, 'openai_auth_failed'),
+        (403, None, 503, 'openai_access_denied'),
+        (429, None, 429, 'openai_rate_limited'),
+        (400, 'moderation_blocked', 400, 'openai_moderation_blocked'),
+        (400, 'invalid_image', 400, 'openai_request_invalid'),
+        (500, None, 502, 'openai_upstream_error'),
+    ]
+    with street_app.app.test_request_context('/api/transform'):
+        street_app.g.request_id = 'test-request'
+        for status, code, expected_status, expected_code in cases:
+            error = SimpleNamespace(
+                status_code=status,
+                code=code,
+                body={},
+            )
+            response = street_app._openai_generation_error(error)
+            assert response.status_code == expected_status
+            assert response.get_json()['code'] == expected_code
 
 
 def test_openai_generation_uses_edit_api(monkeypatch):
@@ -115,6 +335,125 @@ def test_openai_generation_uses_edit_api(monkeypatch):
     assert call['prompt'] == 'Widen the sidewalk'
     assert call['output_format'] == 'png'
     assert call['image'].name == 'reference.png'
+
+
+def test_openai_generation_passes_normalized_edit_mask(monkeypatch):
+    expected = b'generated-with-mask'
+    call = {}
+
+    class FakeImages:
+        def edit(self, **kwargs):
+            call.update(kwargs)
+            return SimpleNamespace(data=[
+                SimpleNamespace(
+                    b64_json=base64.b64encode(expected).decode('ascii')
+                )
+            ])
+
+    monkeypatch.setattr(
+        street_app,
+        'openai_client',
+        SimpleNamespace(images=FakeImages()),
+    )
+    reference = make_png()
+    mask = street_app._validate_edit_mask(
+        SimpleNamespace(read=lambda maximum: make_mask()),
+        reference,
+    )
+
+    result = street_app._generate_image_from_reference(
+        reference,
+        'image/png',
+        'Only edit the marked road area',
+        provider='openai',
+        mask_bytes=mask,
+    )
+
+    assert result == expected
+    assert call['mask'].name == 'edit-mask.png'
+    with Image.open(call['mask']) as mask_image:
+        assert mask_image.size == (1200, 800)
+        assert 'A' in mask_image.getbands()
+
+
+def test_design_plan_returns_retrieved_evidence_and_prompt():
+    response = street_app.app.test_client().post(
+        '/api/design-plan',
+        json={
+            'custom_prompt': '增加一條安全、連續的自行車道',
+            'preset_id': 'protected-bike-lane',
+            'design_preferences': {
+                'street_context': 'main_street',
+                'target_speed_kmh': 30,
+                'intervention_intensity': 'balanced',
+                'priorities': ['cycling', 'safety'],
+                'preserve': ['existing_trees'],
+            },
+        },
+    )
+
+    payload = response.get_json()
+    spec = payload['design_spec']
+    assert response.status_code == 200
+    assert 5 <= len(spec['evidence']) <= 12
+    assert spec['target_speed_kmh'] == 30
+    assert any(
+        item['manual_id'] == 'tw-urban-road-spec-2026'
+        for item in spec['evidence']
+    )
+    assert '[RETRIEVED DESIGN EVIDENCE]' in payload['generation_prompt']
+    assert 'concept image' in payload['generation_prompt']
+
+
+def test_design_plan_supports_english_and_preserves_source_wording():
+    response = street_app.app.test_client().post(
+        '/api/design-plan',
+        headers={'X-UI-Language': 'en'},
+        json={
+            'custom_prompt': 'Add a safe, continuous protected bike lane',
+            'preset_id': 'protected-bike-lane',
+            'language': 'en',
+            'design_preferences': {
+                'street_context': 'main_street',
+                'target_speed_kmh': 30,
+                'priorities': ['cycling', 'safety'],
+            },
+        },
+    )
+
+    payload = response.get_json()
+    spec = payload['design_spec']
+    assert response.status_code == 200
+    assert spec['language'] == 'en'
+    assert spec['design_label'] == 'Protected bicycle lane'
+    assert spec['street_context_label'] == 'Main street'
+    assert all(item['authority_label'] for item in spec['evidence'])
+    assert any(
+        item.get('original_statement')
+        and item['original_statement'] != item['statement']
+        for item in spec['evidence']
+    )
+    assert '[RETRIEVED DESIGN EVIDENCE]' in payload['generation_prompt']
+    assert '[USER\'S DESIGN GOAL — PRIMARY]' in payload['generation_prompt']
+    assert 'Add a safe, continuous protected bike lane' in (
+        payload['generation_prompt']
+    )
+
+
+def test_api_errors_follow_requested_language():
+    response = street_app.app.test_client().post(
+        '/api/design-plan',
+        headers={'X-UI-Language': 'en'},
+        json={'custom_prompt': '', 'language': 'en'},
+    )
+
+    payload = response.get_json()
+    assert response.status_code == 400
+    assert payload['language'] == 'en'
+    assert payload['code'] == 'prompt_required'
+    assert payload['error'] == (
+        'Describe the street transformation you would like to create.'
+    )
 
 
 def test_transform_rejects_unconfigured_provider(monkeypatch):
@@ -188,6 +527,8 @@ def test_transform_keeps_provider_for_followup_edits(monkeypatch):
     payload = response.get_json()
     assert response.status_code == 200
     assert payload['provider'] == 'openai'
+    assert payload['design_spec']['status'] == 'concept'
+    assert 5 <= len(payload['design_spec']['evidence']) <= 12
     assert generation_call['provider'] == 'openai'
     assert street_app.SESSIONS[payload['session_id']]['provider'] == 'openai'
     assert persisted['session_id'] == payload['session_id']
@@ -370,6 +711,7 @@ def test_busy_session_rejects_parallel_chat(monkeypatch):
 
 def test_chat_caps_versions_and_keeps_monotonic_version(monkeypatch):
     persisted = {}
+    generation_prompt = {}
     monkeypatch.setattr(street_app, 'client', object())
     monkeypatch.setattr(
         street_app,
@@ -384,7 +726,20 @@ def test_chat_caps_versions_and_keeps_monotonic_version(monkeypatch):
     monkeypatch.setattr(
         street_app,
         '_generate_image_from_reference',
-        lambda *args, **kwargs: make_png(),
+        lambda *args, **kwargs: (
+            generation_prompt.update({'prompt': args[2]}) or make_png()
+        ),
+    )
+    monkeypatch.setattr(
+        street_app,
+        '_audit_generated_design',
+        lambda *args: {
+            'status': 'reviewed',
+            'score': 88,
+            'summary': '動線清楚',
+            'checks': [],
+            'disclaimer': '概念檢查',
+        },
     )
     monkeypatch.setattr(
         street_app,
@@ -437,6 +792,11 @@ def test_chat_caps_versions_and_keeps_monotonic_version(monkeypatch):
         'session_id': session_id,
         'version_count': 13,
     }
+    assert '[RETRIEVED DESIGN EVIDENCE]' in generation_prompt['prompt']
+    assert street_app.SESSIONS[session_id]['design_spec'][
+        'refinement_history'
+    ] == ['Add more trees']
+    assert response.get_json()['audit']['score'] == 88
 
 
 def test_session_serialization_round_trip_uses_json_and_recreates_lock():
@@ -449,6 +809,12 @@ def test_session_serialization_round_trip_uses_json_and_recreates_lock():
         }],
         'history': [{'role': 'assistant', 'message': '第一版完成'}],
         'initial_prompt': '增加樹木',
+        'language': 'en',
+        'design_spec': {
+            'status': 'concept',
+            'design_label': '綠色街道',
+        },
+        'audit': {'status': 'reviewed', 'score': 90},
         'resolution': '2K',
         'provider': 'openai',
         'version_count': 1,
@@ -464,8 +830,409 @@ def test_session_serialization_round_trip_uses_json_and_recreates_lock():
     assert b'_operation_lock' not in raw
     assert restored['versions'][0]['bytes'] == image_bytes
     assert restored['provider'] == 'openai'
+    assert restored['language'] == 'en'
     assert restored['history'] == session['history']
+    assert restored['design_spec'] == session['design_spec']
+    assert restored['audit'] == session['audit']
     assert isinstance(restored['_operation_lock'], type(threading.Lock()))
+
+
+def make_video_session(
+    session_id='abcdef123456',
+    version=3,
+    versions=None,
+):
+    now = time.time()
+    version_numbers = versions or [version]
+    colors = ['#6d806a', '#789a74', '#96ad80', '#b3bd87', '#c9c88e']
+    street_app.SESSIONS[session_id] = {
+        'versions': [
+            {
+                'version': version_number,
+                'url': f'/generated/v{version_number}.png',
+                'bytes': make_png(color=colors[index % len(colors)]),
+                'mime_type': 'image/png',
+            }
+            for index, version_number in enumerate(version_numbers)
+        ],
+        'history': [],
+        'video_jobs': {},
+        'initial_prompt': '人本街道',
+        'language': 'zh-TW',
+        'version_count': max(version_numbers),
+        'created_at': now,
+        'updated_at': now,
+        '_operation_lock': threading.Lock(),
+    }
+    return session_id
+
+
+def test_create_video_starts_veo_operation(monkeypatch):
+    session_id = make_video_session()
+    calls = {}
+
+    class FakeModels:
+        def generate_videos(self, **kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(name='operations/veo-test')
+
+    fake_client = SimpleNamespace(models=FakeModels())
+    monkeypatch.setattr(street_app, 'client', fake_client)
+
+    response = street_app.app.test_client().post('/api/videos', json={
+        'session_id': session_id,
+        'version': 3,
+        'speed': 'natural',
+        'duration': 8,
+        'format': 'portrait',
+        'language': 'zh-TW',
+    })
+
+    assert response.status_code == 202
+    payload = response.get_json()
+    assert payload['status'] == 'queued'
+    assert payload['aspect_ratio'] == '9:16'
+    assert calls['model'] == street_app.VEO_VIDEO_MODEL
+    assert calls['config'].duration_seconds == 8
+    assert calls['config'].resolution == '720p'
+    assert calls['config'].generate_audio is True
+    assert calls['image'].mime_type == 'image/png'
+    assert calls['config'].last_frame is None
+    assert calls['config'].reference_images is None
+    assert payload['mode'] == 'single'
+    assert payload['versions'] == [3]
+    job = street_app.SESSIONS[session_id]['video_jobs'][payload['job_id']]
+    assert job['operation_name'] == 'operations/veo-test'
+
+
+def test_create_sequence_video_uses_ordered_adjacent_frame_transitions(
+    monkeypatch,
+):
+    session_id = make_video_session(versions=[1, 2, 3, 4, 5])
+    calls = []
+
+    class FakeModels:
+        def generate_videos(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                name=f'operations/veo-sequence-{len(calls)}'
+            )
+
+    monkeypatch.setattr(
+        street_app,
+        'client',
+        SimpleNamespace(models=FakeModels()),
+    )
+
+    response = street_app.app.test_client().post('/api/videos', json={
+        'session_id': session_id,
+        'version': 5,
+        'versions': [2, 4, 1, 5],
+        'mode': 'sequence',
+        'speed': 'gentle',
+        'duration': 8,
+        'format': 'landscape',
+        'language': 'en',
+    })
+
+    assert response.status_code == 202
+    payload = response.get_json()
+    assert payload['mode'] == 'sequence'
+    assert payload['versions'] == [2, 4, 1, 5]
+    assert payload['version'] == 5
+    assert payload['total_duration'] == 24
+    session_versions = street_app.SESSIONS[session_id]['versions']
+    assert len(calls) == 3
+    assert [
+        call['image'].image_bytes
+        for call in calls
+    ] == [
+        session_versions[1]['bytes'],
+        session_versions[3]['bytes'],
+        session_versions[0]['bytes'],
+    ]
+    assert [
+        call['config'].last_frame.image_bytes
+        for call in calls
+    ] == [
+        session_versions[3]['bytes'],
+        session_versions[0]['bytes'],
+        session_versions[4]['bytes'],
+    ]
+    assert [call['prompt'] for call in calls] == [
+        street_app._video_prompt('gentle', [2, 4]),
+        street_app._video_prompt('gentle', [4, 1]),
+        street_app._video_prompt('gentle', [1, 5]),
+    ]
+    job = street_app.SESSIONS[session_id]['video_jobs'][payload['job_id']]
+    assert job['operation_names'] == [
+        'operations/veo-sequence-1',
+        'operations/veo-sequence-2',
+        'operations/veo-sequence-3',
+    ]
+
+
+def test_create_sequence_video_validates_count_uniqueness_and_duration(
+    monkeypatch,
+):
+    session_id = make_video_session(versions=[1, 2, 3, 4, 5])
+    monkeypatch.setattr(
+        street_app,
+        'client',
+        SimpleNamespace(models=SimpleNamespace(generate_videos=lambda: None)),
+    )
+    monkeypatch.setattr(street_app, 'MAX_VIDEOS_PER_DAY', 20)
+    client = street_app.app.test_client()
+    base = {
+        'session_id': session_id,
+        'mode': 'sequence',
+        'speed': 'natural',
+        'duration': 8,
+        'format': 'landscape',
+    }
+
+    too_few = client.post(
+        '/api/videos',
+        json={**base, 'versions': [1, 2]},
+    )
+    duplicate = client.post(
+        '/api/videos',
+        json={**base, 'versions': [1, 2, 2]},
+    )
+    too_many = client.post(
+        '/api/videos',
+        json={**base, 'versions': [1, 2, 3, 4, 5, 6]},
+    )
+    wrong_type = client.post(
+        '/api/videos',
+        json={**base, 'versions': '123'},
+    )
+    wrong_duration = client.post(
+        '/api/videos',
+        json={**base, 'versions': [1, 2, 3], 'duration': 6},
+    )
+
+    assert too_few.status_code == 400
+    assert too_few.get_json()['code'] == 'video_versions_invalid'
+    assert duplicate.status_code == 400
+    assert duplicate.get_json()['code'] == 'video_versions_invalid'
+    assert too_many.status_code == 400
+    assert too_many.get_json()['code'] == 'video_versions_invalid'
+    assert wrong_type.status_code == 400
+    assert wrong_type.get_json()['code'] == 'video_versions_invalid'
+    assert wrong_duration.status_code == 400
+    assert wrong_duration.get_json()['code'] == 'video_settings_invalid'
+
+
+def test_create_video_rejects_unsupported_duration(monkeypatch):
+    session_id = make_video_session()
+    monkeypatch.setattr(
+        street_app,
+        'client',
+        SimpleNamespace(models=SimpleNamespace(generate_videos=lambda: None)),
+    )
+
+    response = street_app.app.test_client().post('/api/videos', json={
+        'session_id': session_id,
+        'version': 3,
+        'speed': 'natural',
+        'duration': 20,
+        'format': 'landscape',
+    })
+
+    assert response.status_code == 400
+    assert response.get_json()['code'] == 'video_settings_invalid'
+
+
+def test_video_poll_progress_then_saves_completed_mp4(monkeypatch):
+    session_id = make_video_session()
+    job_id = '1234567890abcdef'
+    session = street_app.SESSIONS[session_id]
+    session['video_jobs'][job_id] = {
+        'id': job_id,
+        'operation_name': 'operations/veo-test',
+        'status': 'queued',
+        'version': 3,
+        'speed': 'natural',
+        'duration': 8,
+        'format': 'landscape',
+        'aspect_ratio': '16:9',
+        'video_url': '',
+        'error': '',
+        'created_at': time.time(),
+        'updated_at': time.time(),
+    }
+    operation_results = [
+        SimpleNamespace(done=False, error=None, response=None),
+        SimpleNamespace(
+            done=True,
+            error=None,
+            response=SimpleNamespace(generated_videos=[
+                SimpleNamespace(video='veo-file'),
+            ]),
+        ),
+    ]
+
+    class FakeOperations:
+        def get(self, operation):
+            assert operation.name == 'operations/veo-test'
+            return operation_results.pop(0)
+
+    class FakeFiles:
+        def download(self, file):
+            assert file == 'veo-file'
+            return b'fake-mp4'
+
+    monkeypatch.setattr(
+        street_app,
+        'client',
+        SimpleNamespace(
+            operations=FakeOperations(),
+            files=FakeFiles(),
+        ),
+    )
+    monkeypatch.setattr(
+        street_app,
+        '_save_generated_video',
+        lambda session_id, job_id, video_bytes: '/generated/walk.mp4',
+    )
+    client = street_app.app.test_client()
+
+    progress = client.get(
+        f'/api/videos/{job_id}?session_id={session_id}',
+    )
+    completed = client.get(
+        f'/api/videos/{job_id}?session_id={session_id}',
+    )
+
+    assert progress.status_code == 200
+    assert progress.get_json()['status'] == 'in_progress'
+    assert completed.status_code == 200
+    assert completed.get_json()['status'] == 'completed'
+    assert completed.get_json()['video_url'] == '/generated/walk.mp4'
+
+
+def test_sequence_video_poll_merges_completed_segments(monkeypatch):
+    session_id = make_video_session(versions=[1, 2, 3])
+    job_id = '1234567890abcdef'
+    session = street_app.SESSIONS[session_id]
+    session['video_jobs'][job_id] = {
+        'id': job_id,
+        'operation_name': 'operations/veo-1',
+        'operation_names': ['operations/veo-1', 'operations/veo-2'],
+        'status': 'queued',
+        'version': 3,
+        'versions': [1, 2, 3],
+        'mode': 'sequence',
+        'speed': 'natural',
+        'duration': 8,
+        'total_duration': 16,
+        'format': 'landscape',
+        'aspect_ratio': '16:9',
+        'video_url': '',
+        'error': '',
+        'created_at': time.time(),
+        'updated_at': time.time(),
+    }
+    video_files = {
+        'operations/veo-1': 'veo-file-1',
+        'operations/veo-2': 'veo-file-2',
+    }
+
+    class FakeOperations:
+        def get(self, operation):
+            return SimpleNamespace(
+                done=True,
+                error=None,
+                response=SimpleNamespace(generated_videos=[
+                    SimpleNamespace(video=video_files[operation.name]),
+                ]),
+            )
+
+    class FakeFiles:
+        def download(self, file):
+            return {
+                'veo-file-1': b'segment-one',
+                'veo-file-2': b'segment-two',
+            }[file]
+
+    merged = {}
+    monkeypatch.setattr(
+        street_app,
+        'client',
+        SimpleNamespace(
+            operations=FakeOperations(),
+            files=FakeFiles(),
+        ),
+    )
+    monkeypatch.setattr(
+        street_app,
+        '_concatenate_video_segments',
+        lambda segments: (
+            merged.update({'segments': segments})
+            or b'merged-mp4'
+        ),
+    )
+    monkeypatch.setattr(
+        street_app,
+        '_save_generated_video',
+        lambda session_id, job_id, video_bytes: (
+            merged.update({'video_bytes': video_bytes})
+            or '/generated/sequence.mp4'
+        ),
+    )
+
+    response = street_app.app.test_client().get(
+        f'/api/videos/{job_id}?session_id={session_id}',
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()['status'] == 'completed'
+    assert response.get_json()['total_duration'] == 16
+    assert merged['segments'] == [b'segment-one', b'segment-two']
+    assert merged['video_bytes'] == b'merged-mp4'
+
+
+def test_session_serialization_preserves_video_jobs():
+    session_id = make_video_session()
+    job_id = '1234567890abcdef'
+    street_app.SESSIONS[session_id]['video_jobs'][job_id] = {
+        'id': job_id,
+        'operation_name': 'operations/veo-test',
+        'operation_names': [
+            'operations/veo-test',
+            'operations/veo-test-2',
+        ],
+        'status': 'in_progress',
+        'version': 3,
+        'versions': [1, 2, 3],
+        'mode': 'sequence',
+        'speed': 'natural',
+        'duration': 8,
+        'total_duration': 16,
+        'format': 'landscape',
+        'aspect_ratio': '16:9',
+        'video_url': '',
+        'error': '',
+        'created_at': 100.0,
+        'updated_at': 200.0,
+    }
+
+    restored = street_app._deserialize_session(
+        street_app._serialize_session(street_app.SESSIONS[session_id])
+    )
+
+    assert restored['video_jobs'][job_id]['status'] == 'in_progress'
+    assert restored['video_jobs'][job_id]['operation_name'] == (
+        'operations/veo-test'
+    )
+    assert restored['video_jobs'][job_id]['operation_names'] == [
+        'operations/veo-test',
+        'operations/veo-test-2',
+    ]
+    assert restored['video_jobs'][job_id]['versions'] == [1, 2, 3]
+    assert restored['video_jobs'][job_id]['total_duration'] == 16
+    assert restored['versions'][0]['version'] == 3
 
 
 def test_get_session_loads_redis_state_into_local_cache(monkeypatch):
