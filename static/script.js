@@ -71,6 +71,11 @@ const UI_TEXT = {
         afterLabel: 'After · 改造後',
         compareAria: '拖曳比較改造前後',
         compareValue: '改造前 {before}%，改造後 {after}%',
+        imageDownloads: '圖片下載',
+        downloadOriginalImage: '下載原始圖片',
+        downloadCurrentImage: '下載目前生成圖',
+        downloadPreparing: '正在準備下載…',
+        downloadFailed: '圖片下載失敗，請稍後再試。',
         videoTitle: '滿意這一版？製作街道漫遊影片',
         videoSummary: '以第一人稱沿著新街道向前走',
         copilotName: '小綠',
@@ -84,6 +89,20 @@ const UI_TEXT = {
         videoKicker: '走進你的設計',
         videoSetupTitle: '走進你設計的街道',
         videoSetupDescription: '鏡頭會像行人的視線，沿著人行道自然向前移動。',
+        videoSource: '影片素材',
+        videoSingleSource: '讓目前版本動起來',
+        videoSingleSourceSub: '以目前顯示的圖片生成漫遊',
+        videoSequenceSource: '串連 3–5 張版本',
+        videoSequenceSourceSub: '選圖並調整連貫順序',
+        videoStoryboardTitle: '選擇要串連的圖片',
+        videoStoryboardCount: '已選 {count} / 3–5 張',
+        videoStoryboardNeedMore: '還需要選 {count} 張。',
+        videoStoryboardReady: '會依下方順序生成 {segments} 段，合併後約 {seconds} 秒。',
+        videoStoryboardMaximum: '一次最多選 5 張圖片。',
+        videoStoryboardNote: '每兩張相鄰圖片會各使用一次 Veo 生成額度，再合併成單一 MP4。圖片會固定每段首尾，實際過場仍由 Veo 自然補間。',
+        moveEarlier: '將 v{version} 往前移',
+        moveLater: '將 v{version} 往後移',
+        sequenceDurationNote: '每段固定 8 秒。',
         walkingPace: '步行節奏',
         gentle: '慢慢散步',
         gentleSub: '悠閒看街景',
@@ -102,6 +121,7 @@ const UI_TEXT = {
         confirmVideo: '開始生成影片',
         videoStarting: '正在建立街道漫遊',
         videoStartingMessage: '正在把 v{version} 送給 Google Veo…',
+        videoSequenceStartingMessage: '正在把 {versions} 依順序送給 Google Veo…',
         videoQueued: '街道漫遊已排入生成',
         videoQueuedMessage: 'Google Veo 正在處理，通常需要幾分鐘；可以留在這個畫面等候。',
         videoGenerating: '正在走進你的新街道',
@@ -129,7 +149,9 @@ const UI_TEXT = {
         fallbackGreeting: '嗨，我是小綠 🌱 跟我說你想怎麼調整這條街吧！',
         chatError: '糟糕，我這邊有點卡 🌱 {message}',
         fromVersion: '從 v{version} 建立第一人稱漫遊',
+        fromSequence: '串連 {count} 張版本，建立連貫漫遊',
         videoReady: 'v{version} 漫遊影片設定完成',
+        videoSequenceReady: '{count} 張圖片的漫遊設定完成',
         evidenceSourceOriginal: '原文',
         removeImage: '移除照片',
         closeVideo: '關閉影片設定',
@@ -220,6 +242,11 @@ const UI_TEXT = {
         afterLabel: 'After',
         compareAria: 'Drag to compare before and after',
         compareValue: 'Before {before}%, after {after}%',
+        imageDownloads: 'Image downloads',
+        downloadOriginalImage: 'Download original',
+        downloadCurrentImage: 'Download current result',
+        downloadPreparing: 'Preparing download…',
+        downloadFailed: 'The image could not be downloaded. Please try again.',
         videoTitle: 'Happy with this version? Create a street walk-through',
         videoSummary: 'Move forward along the redesigned street in first person',
         copilotName: 'Greenie',
@@ -233,6 +260,20 @@ const UI_TEXT = {
         videoKicker: 'WALK THROUGH YOUR DESIGN',
         videoSetupTitle: 'Walk through your redesigned street',
         videoSetupDescription: 'The camera moves naturally forward from a pedestrian viewpoint.',
+        videoSource: 'Video source',
+        videoSingleSource: 'Animate the current version',
+        videoSingleSourceSub: 'Create a walk-through from the image on screen',
+        videoSequenceSource: 'Connect 3–5 versions',
+        videoSequenceSourceSub: 'Choose images and arrange their continuity',
+        videoStoryboardTitle: 'Choose images to connect',
+        videoStoryboardCount: '{count} selected / 3–5',
+        videoStoryboardNeedMore: 'Choose {count} more image(s).',
+        videoStoryboardReady: 'Veo will create {segments} transitions in this order, about {seconds} seconds after merging.',
+        videoStoryboardMaximum: 'You can select up to 5 images.',
+        videoStoryboardNote: 'Each adjacent pair uses one Veo generation, then the segments are merged into one MP4. Images fix each segment’s endpoints; Veo still interpolates the transition.',
+        moveEarlier: 'Move v{version} earlier',
+        moveLater: 'Move v{version} later',
+        sequenceDurationNote: 'Each transition is fixed at 8 seconds.',
         walkingPace: 'Walking pace',
         gentle: 'Gentle stroll',
         gentleSub: 'Take in the details',
@@ -251,6 +292,7 @@ const UI_TEXT = {
         confirmVideo: 'Generate video',
         videoStarting: 'Starting your street walk-through',
         videoStartingMessage: 'Sending v{version} to Google Veo…',
+        videoSequenceStartingMessage: 'Sending {versions} to Google Veo in order…',
         videoQueued: 'Street walk-through queued',
         videoQueuedMessage: 'Google Veo is working. This usually takes a few minutes; you can keep this screen open.',
         videoGenerating: 'Walking into your redesigned street',
@@ -278,7 +320,9 @@ const UI_TEXT = {
         fallbackGreeting: 'Hi, I’m Greenie 🌱 Tell me what you would like to adjust next.',
         chatError: 'I got a little stuck 🌱 {message}',
         fromVersion: 'Create a first-person walk-through from v{version}',
+        fromSequence: 'Connect {count} versions into one walk-through',
         videoReady: 'Walk-through settings ready for v{version}',
+        videoSequenceReady: 'Walk-through settings ready for {count} images',
         evidenceSourceOriginal: 'Original',
         removeImage: 'Remove photo',
         closeVideo: 'Close video settings',
@@ -441,6 +485,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadingText = document.getElementById('loading-text');
     const roundBadge = document.getElementById('round-badge');
     const versionStrip = document.getElementById('version-strip');
+    const downloadOriginalImage = document.getElementById('download-original-image');
+    const downloadCurrentImage = document.getElementById('download-current-image');
     const copilotMessages = document.getElementById('copilot-messages');
     const copilotSuggestions = document.getElementById('copilot-suggestions');
     const copilotInputForm = document.getElementById('copilot-input-form');
@@ -453,6 +499,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const videoSetupForm = document.getElementById('video-setup-form');
     const videoModalClose = document.getElementById('video-modal-close');
     const videoCancel = document.getElementById('video-cancel');
+    const videoSourceInputs = document.querySelectorAll(
+        'input[name="video-source-mode"]'
+    );
+    const videoSequenceMode = document.querySelector(
+        'input[name="video-source-mode"][value="sequence"]'
+    );
+    const videoStoryboardPanel = document.getElementById('video-storyboard-panel');
+    const videoStoryboardOptions = document.getElementById('video-storyboard-options');
+    const videoStoryboardOrder = document.getElementById('video-storyboard-order');
+    const videoStoryboardCount = document.getElementById('video-storyboard-count');
+    const videoStoryboardFeedback = document.getElementById('video-storyboard-feedback');
     const videoStatusCard = document.getElementById('video-status-card');
     const videoStatusIcon = document.getElementById('video-status-icon');
     const videoStatusTitle = document.getElementById('video-status-title');
@@ -489,6 +546,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let videoPollTimer = null;
     let videoBusy = false;
     let videoPollFailures = 0;
+    let selectedStoryboardVersions = [];
 
     function applyLanguage() {
         document.documentElement.lang = currentLanguage === 'en'
@@ -540,6 +598,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         setComparisonPosition(comparisonRange.value);
         updateVideoLauncher();
+        renderVideoStoryboard();
+        updateImageDownloadState();
         if (activeVideoJob) renderVideoStatus(activeVideoJob);
         if (activeDesignPlan) renderDesignPlan(activeDesignPlan, false);
         if (currentDesignSpec || currentAudit) {
@@ -578,7 +638,78 @@ document.addEventListener('DOMContentLoaded', () => {
         originalImageUrl = URL.createObjectURL(file);
         beforeImage.src = originalImageUrl;
         setComparisonPosition(50);
+        updateImageDownloadState();
     }
+
+    function safeDownloadName(value) {
+        return String(value || 'street-image')
+            .replace(/[^\p{L}\p{N}._-]+/gu, '-')
+            .replace(/^-+|-+$/g, '') || 'street-image';
+    }
+
+    function triggerBlobDownload(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = safeDownloadName(filename);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    async function withDownloadState(button, action) {
+        if (!button || button.disabled) return;
+        const label = button.querySelector('span:last-child');
+        const originalLabel = label ? label.textContent : '';
+        button.disabled = true;
+        if (label) label.textContent = tr('downloadPreparing');
+        try {
+            await action();
+        } catch (error) {
+            console.error('Image download error:', error);
+            alert(tr('downloadFailed'));
+        } finally {
+            if (label) label.textContent = originalLabel;
+            updateImageDownloadState();
+        }
+    }
+
+    function updateImageDownloadState() {
+        if (!downloadOriginalImage || !downloadCurrentImage) return;
+        downloadOriginalImage.disabled = !selectedFile;
+        downloadCurrentImage.disabled = !versions[currentVersion];
+    }
+
+    downloadOriginalImage.addEventListener('click', () => {
+        withDownloadState(downloadOriginalImage, async () => {
+            const extension = selectedFile?.name?.includes('.')
+                ? ''
+                : `.${(selectedFile?.type || 'image/jpeg').split('/')[1] || 'jpg'}`;
+            triggerBlobDownload(
+                selectedFile,
+                selectedFile?.name || `original-street${extension}`
+            );
+        });
+    });
+
+    downloadCurrentImage.addEventListener('click', () => {
+        withDownloadState(downloadCurrentImage, async () => {
+            const activeVersion = versions[currentVersion];
+            if (!activeVersion) throw new Error('No active image');
+            const response = await fetch(activeVersion.image_url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const blob = await response.blob();
+            const extension = (
+                blob.type === 'image/png' ? 'png'
+                    : blob.type === 'image/webp' ? 'webp' : 'jpg'
+            );
+            triggerBlobDownload(
+                blob,
+                `ai-street-design-v${activeVersion.version}.${extension}`
+            );
+        });
+    });
 
     comparisonRange.addEventListener('input', (event) => {
         setComparisonPosition(event.target.value);
@@ -785,6 +916,7 @@ document.addEventListener('DOMContentLoaded', () => {
         maskStrokes = [];
         invalidateDesignPlan();
         setBeforeImage(file);
+        updateImageDownloadState();
         const reader = new FileReader();
         reader.onload = (e) => {
             imagePreview.src = e.target.result;
@@ -827,6 +959,7 @@ document.addEventListener('DOMContentLoaded', () => {
         imagePreview.src = '';
         uploadContent.classList.remove('hidden');
         previewContainer.classList.add('hidden');
+        updateImageDownloadState();
         updateGenerateState();
     }
 
@@ -1088,6 +1221,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             sessionId = data.session_id;
             versions = [];
+            selectedStoryboardVersions = [];
+            videoDrafts.clear();
+            activeVideoJob = null;
+            renderVideoStatus(null);
             addVersion(data.version || 1, data.image_url);
             showVersion(versions.length - 1);
             renderResultReview(data.design_spec, data.audit);
@@ -1177,6 +1314,160 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ===== Google Veo walk-through video =====
+    function currentVideoMode() {
+        const selected = videoSetupForm.querySelector(
+            'input[name="video-source-mode"]:checked'
+        );
+        return selected?.value === 'sequence' ? 'sequence' : 'single';
+    }
+
+    function setVideoSourceMode(mode) {
+        setCheckedVideoOption(
+            'video-source-mode',
+            mode === 'sequence' && versions.length >= 3 ? 'sequence' : 'single'
+        );
+        renderVideoStoryboard();
+    }
+
+    function prepareStoryboardSelection(requestedVersions = null) {
+        const available = new Set(versions.map(item => item.version));
+        const requested = Array.isArray(requestedVersions)
+            ? requestedVersions
+            : selectedStoryboardVersions;
+        selectedStoryboardVersions = requested
+            .map(Number)
+            .filter((version, index, items) => (
+                available.has(version) && items.indexOf(version) === index
+            ))
+            .slice(0, 5);
+        if (selectedStoryboardVersions.length < 3 && versions.length >= 3) {
+            selectedStoryboardVersions = versions
+                .slice(-Math.min(3, versions.length))
+                .map(item => item.version);
+        }
+    }
+
+    function moveStoryboardVersion(index, direction) {
+        const nextIndex = index + direction;
+        if (
+            nextIndex < 0
+            || nextIndex >= selectedStoryboardVersions.length
+        ) return;
+        [
+            selectedStoryboardVersions[index],
+            selectedStoryboardVersions[nextIndex],
+        ] = [
+            selectedStoryboardVersions[nextIndex],
+            selectedStoryboardVersions[index],
+        ];
+        renderVideoStoryboard();
+    }
+
+    function renderVideoStoryboard(feedbackKey = '') {
+        if (!videoSequenceMode) return;
+        const sequenceAvailable = versions.length >= 3;
+        videoSequenceMode.disabled = !sequenceAvailable;
+        if (!sequenceAvailable && currentVideoMode() === 'sequence') {
+            setCheckedVideoOption('video-source-mode', 'single');
+        }
+        const sequenceMode = currentVideoMode() === 'sequence';
+        videoStoryboardPanel.classList.toggle('hidden', !sequenceMode);
+
+        document.querySelectorAll('input[name="video-duration"]').forEach(input => {
+            input.disabled = sequenceMode && input.value !== '8';
+        });
+        if (sequenceMode) setCheckedVideoOption('video-duration', '8');
+
+        const available = new Set(versions.map(item => item.version));
+        selectedStoryboardVersions = selectedStoryboardVersions.filter(
+            version => available.has(version)
+        );
+        videoStoryboardOptions.innerHTML = '';
+        versions.forEach(item => {
+            const choice = document.createElement('label');
+            choice.className = 'storyboard-image-choice';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.value = String(item.version);
+            input.checked = selectedStoryboardVersions.includes(item.version);
+            input.setAttribute(
+                'aria-label',
+                `${tr('round', { version: item.version })}`
+            );
+            input.addEventListener('change', () => {
+                if (input.checked) {
+                    if (selectedStoryboardVersions.length >= 5) {
+                        input.checked = false;
+                        renderVideoStoryboard('videoStoryboardMaximum');
+                        return;
+                    }
+                    selectedStoryboardVersions.push(item.version);
+                } else {
+                    selectedStoryboardVersions = selectedStoryboardVersions.filter(
+                        version => version !== item.version
+                    );
+                }
+                renderVideoStoryboard();
+            });
+            const image = document.createElement('img');
+            image.src = item.image_url;
+            image.alt = `v${item.version}`;
+            const label = document.createElement('span');
+            label.textContent = `v${item.version}`;
+            choice.append(input, image, label);
+            videoStoryboardOptions.appendChild(choice);
+        });
+
+        videoStoryboardOrder.innerHTML = '';
+        selectedStoryboardVersions.forEach((version, index) => {
+            const chip = document.createElement('span');
+            chip.className = 'storyboard-order-chip';
+            const title = document.createElement('strong');
+            title.textContent = `${index + 1}. v${version}`;
+            const earlier = document.createElement('button');
+            earlier.type = 'button';
+            earlier.textContent = '←';
+            earlier.disabled = index === 0;
+            earlier.setAttribute('aria-label', tr('moveEarlier', { version }));
+            earlier.addEventListener('click', () => (
+                moveStoryboardVersion(index, -1)
+            ));
+            const later = document.createElement('button');
+            later.type = 'button';
+            later.textContent = '→';
+            later.disabled = index === selectedStoryboardVersions.length - 1;
+            later.setAttribute('aria-label', tr('moveLater', { version }));
+            later.addEventListener('click', () => (
+                moveStoryboardVersion(index, 1)
+            ));
+            chip.append(title, earlier, later);
+            videoStoryboardOrder.appendChild(chip);
+        });
+
+        const count = selectedStoryboardVersions.length;
+        videoStoryboardCount.textContent = tr('videoStoryboardCount', { count });
+        videoStoryboardFeedback.classList.toggle('is-error', !!feedbackKey || count < 3);
+        if (feedbackKey) {
+            videoStoryboardFeedback.textContent = tr(feedbackKey);
+        } else if (count < 3) {
+            videoStoryboardFeedback.textContent = tr('videoStoryboardNeedMore', {
+                count: 3 - count,
+            });
+        } else {
+            videoStoryboardFeedback.textContent = [
+                tr('videoStoryboardReady', {
+                    segments: count - 1,
+                    seconds: (count - 1) * 8,
+                }),
+                tr('sequenceDurationNote'),
+            ].join(' ');
+        }
+    }
+
+    videoSourceInputs.forEach(input => {
+        input.addEventListener('change', () => renderVideoStoryboard());
+    });
+
     videoLauncher.addEventListener('click', () => {
         if (videoLauncher.disabled || !versions[currentVersion]) return;
         const version = versions[currentVersion].version;
@@ -1185,6 +1476,11 @@ document.addEventListener('DOMContentLoaded', () => {
             setCheckedVideoOption('video-speed', draft.speed);
             setCheckedVideoOption('video-duration', draft.duration);
             setCheckedVideoOption('video-format', draft.format);
+            prepareStoryboardSelection(draft.versions);
+            setVideoSourceMode(draft.mode);
+        } else {
+            prepareStoryboardSelection();
+            setVideoSourceMode(versions.length >= 3 ? 'sequence' : 'single');
         }
         videoReturnFocus = document.activeElement;
         videoModal.classList.remove('hidden');
@@ -1208,10 +1504,25 @@ document.addEventListener('DOMContentLoaded', () => {
         const activeVersion = versions[currentVersion];
         if (!activeVersion || !sessionId || videoBusy) return;
         const formData = new FormData(videoSetupForm);
+        const mode = currentVideoMode();
+        const videoVersions = mode === 'sequence'
+            ? [...selectedStoryboardVersions]
+            : [activeVersion.version];
+        if (
+            mode === 'sequence'
+            && (videoVersions.length < 3 || videoVersions.length > 5)
+        ) {
+            renderVideoStoryboard();
+            return;
+        }
         const draft = {
             speed: formData.get('video-speed'),
-            duration: formData.get('video-duration'),
+            duration: mode === 'sequence'
+                ? '8'
+                : formData.get('video-duration'),
             format: formData.get('video-format'),
+            mode,
+            versions: videoVersions,
         };
         videoDrafts.set(activeVersion.version, draft);
         videoBusy = true;
@@ -1235,6 +1546,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({
                     session_id: sessionId,
                     version: activeVersion.version,
+                    versions: videoVersions,
                     language: currentLanguage,
                     ...draft,
                 }),
@@ -1337,9 +1649,20 @@ document.addEventListener('DOMContentLoaded', () => {
         videoStatusCard.classList.toggle('is-failed', status === 'failed');
         videoStatusIcon.textContent = content[0];
         videoStatusTitle.textContent = tr(content[1]);
-        videoStatusMessage.textContent = job.error || tr(content[2], {
-            version: job.version,
-        });
+        const isSequenceStarting = (
+            status === 'starting'
+            && job.mode === 'sequence'
+            && Array.isArray(job.versions)
+        );
+        videoStatusMessage.textContent = job.error || tr(
+            isSequenceStarting ? 'videoSequenceStartingMessage' : content[2],
+            {
+                version: job.version,
+                versions: (job.versions || [])
+                    .map(version => `v${version}`)
+                    .join(' → '),
+            }
+        );
         videoProgress.setAttribute('aria-label', tr('videoProgressAria'));
         videoProgress.classList.toggle(
             'hidden',
@@ -1356,7 +1679,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 videoPlayer.src = job.video_url;
             }
             videoDownload.href = job.video_url;
-            videoDownload.download = `street-walkthrough-v${job.version}.mp4`;
+            const versionLabel = job.mode === 'sequence'
+                ? (job.versions || []).map(version => `v${version}`).join('-')
+                : `v${job.version}`;
+            videoDownload.download = `street-walkthrough-${versionLabel}.mp4`;
         }
     }
 
@@ -1389,18 +1715,22 @@ document.addEventListener('DOMContentLoaded', () => {
         const draft = videoDrafts.get(activeVersion.version);
         if (!draft) {
             videoLauncherTitle.textContent = tr('videoTitle');
-            videoLauncherSummary.textContent = tr('fromVersion', {
-                version: activeVersion.version,
-            });
+            videoLauncherSummary.textContent = versions.length >= 3
+                ? tr('fromSequence', { count: Math.min(versions.length, 5) })
+                : tr('fromVersion', { version: activeVersion.version });
             return;
         }
 
-        videoLauncherTitle.textContent = tr('videoReady', {
-            version: activeVersion.version,
-        });
+        videoLauncherTitle.textContent = draft.mode === 'sequence'
+            ? tr('videoSequenceReady', { count: draft.versions.length })
+            : tr('videoReady', { version: activeVersion.version });
         videoLauncherSummary.textContent = [
             tr(draft.speed),
-            tr('seconds', { value: draft.duration }),
+            tr('seconds', {
+                value: draft.mode === 'sequence'
+                    ? (draft.versions.length - 1) * 8
+                    : draft.duration,
+            }),
             tr(draft.format),
         ].join(' · ');
     }
@@ -1509,6 +1839,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const url = imageUrl + (imageUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
         versions.push({ version: versionNum, image_url: url });
         renderVersionStrip();
+        renderVideoStoryboard();
+        updateImageDownloadState();
     }
 
     function renderVersionStrip() {
@@ -1533,6 +1865,7 @@ document.addEventListener('DOMContentLoaded', () => {
         resultImage.src = v.image_url;
         roundBadge.textContent = tr('round', { version: v.version });
         renderVersionStrip();
+        updateImageDownloadState();
         updateVideoLauncher();
     }
 

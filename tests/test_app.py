@@ -15,9 +15,9 @@ def setup_function():
     street_app.RATE_LIMITS.clear()
 
 
-def make_png(width=1200, height=800):
+def make_png(width=1200, height=800, color='#6d806a'):
     output = io.BytesIO()
-    Image.new('RGB', (width, height), '#6d806a').save(output, format='PNG')
+    Image.new('RGB', (width, height), color).save(output, format='PNG')
     return output.getvalue()
 
 
@@ -59,11 +59,16 @@ def test_index_renders_both_provider_choices(monkeypatch):
     assert b'id="comparison-viewer"' in response.data
     assert b'id="before-image"' in response.data
     assert b'id="comparison-range"' in response.data
+    assert b'id="download-original-image"' in response.data
+    assert b'id="download-current-image"' in response.data
     assert b'id="video-launcher"' in response.data
     assert b'id="video-modal"' in response.data
     assert b'name="video-speed"' in response.data
     assert b'name="video-duration"' in response.data
     assert b'name="video-format"' in response.data
+    assert b'name="video-source-mode"' in response.data
+    assert b'id="video-storyboard-panel"' in response.data
+    assert b'id="video-storyboard-options"' in response.data
     assert b'id="video-status-card"' in response.data
     assert b'name="video-duration" value="4"' in response.data
     assert b'name="video-duration" value="6"' in response.data
@@ -694,20 +699,29 @@ def test_session_serialization_round_trip_uses_json_and_recreates_lock():
     assert isinstance(restored['_operation_lock'], type(threading.Lock()))
 
 
-def make_video_session(session_id='abcdef123456', version=3):
+def make_video_session(
+    session_id='abcdef123456',
+    version=3,
+    versions=None,
+):
     now = time.time()
+    version_numbers = versions or [version]
+    colors = ['#6d806a', '#789a74', '#96ad80', '#b3bd87', '#c9c88e']
     street_app.SESSIONS[session_id] = {
-        'versions': [{
-            'version': version,
-            'url': f'/generated/v{version}.png',
-            'bytes': make_png(),
-            'mime_type': 'image/png',
-        }],
+        'versions': [
+            {
+                'version': version_number,
+                'url': f'/generated/v{version_number}.png',
+                'bytes': make_png(color=colors[index % len(colors)]),
+                'mime_type': 'image/png',
+            }
+            for index, version_number in enumerate(version_numbers)
+        ],
         'history': [],
         'video_jobs': {},
         'initial_prompt': '人本街道',
         'language': 'zh-TW',
-        'version_count': version,
+        'version_count': max(version_numbers),
         'created_at': now,
         'updated_at': now,
         '_operation_lock': threading.Lock(),
@@ -745,8 +759,131 @@ def test_create_video_starts_veo_operation(monkeypatch):
     assert calls['config'].resolution == '720p'
     assert calls['config'].generate_audio is True
     assert calls['image'].mime_type == 'image/png'
+    assert calls['config'].last_frame is None
+    assert calls['config'].reference_images is None
+    assert payload['mode'] == 'single'
+    assert payload['versions'] == [3]
     job = street_app.SESSIONS[session_id]['video_jobs'][payload['job_id']]
     assert job['operation_name'] == 'operations/veo-test'
+
+
+def test_create_sequence_video_uses_ordered_adjacent_frame_transitions(
+    monkeypatch,
+):
+    session_id = make_video_session(versions=[1, 2, 3, 4, 5])
+    calls = []
+
+    class FakeModels:
+        def generate_videos(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                name=f'operations/veo-sequence-{len(calls)}'
+            )
+
+    monkeypatch.setattr(
+        street_app,
+        'client',
+        SimpleNamespace(models=FakeModels()),
+    )
+
+    response = street_app.app.test_client().post('/api/videos', json={
+        'session_id': session_id,
+        'version': 5,
+        'versions': [2, 4, 1, 5],
+        'mode': 'sequence',
+        'speed': 'gentle',
+        'duration': 8,
+        'format': 'landscape',
+        'language': 'en',
+    })
+
+    assert response.status_code == 202
+    payload = response.get_json()
+    assert payload['mode'] == 'sequence'
+    assert payload['versions'] == [2, 4, 1, 5]
+    assert payload['version'] == 5
+    assert payload['total_duration'] == 24
+    session_versions = street_app.SESSIONS[session_id]['versions']
+    assert len(calls) == 3
+    assert [
+        call['image'].image_bytes
+        for call in calls
+    ] == [
+        session_versions[1]['bytes'],
+        session_versions[3]['bytes'],
+        session_versions[0]['bytes'],
+    ]
+    assert [
+        call['config'].last_frame.image_bytes
+        for call in calls
+    ] == [
+        session_versions[3]['bytes'],
+        session_versions[0]['bytes'],
+        session_versions[4]['bytes'],
+    ]
+    assert [call['prompt'] for call in calls] == [
+        street_app._video_prompt('gentle', [2, 4]),
+        street_app._video_prompt('gentle', [4, 1]),
+        street_app._video_prompt('gentle', [1, 5]),
+    ]
+    job = street_app.SESSIONS[session_id]['video_jobs'][payload['job_id']]
+    assert job['operation_names'] == [
+        'operations/veo-sequence-1',
+        'operations/veo-sequence-2',
+        'operations/veo-sequence-3',
+    ]
+
+
+def test_create_sequence_video_validates_count_uniqueness_and_duration(
+    monkeypatch,
+):
+    session_id = make_video_session(versions=[1, 2, 3, 4, 5])
+    monkeypatch.setattr(
+        street_app,
+        'client',
+        SimpleNamespace(models=SimpleNamespace(generate_videos=lambda: None)),
+    )
+    monkeypatch.setattr(street_app, 'MAX_VIDEOS_PER_DAY', 20)
+    client = street_app.app.test_client()
+    base = {
+        'session_id': session_id,
+        'mode': 'sequence',
+        'speed': 'natural',
+        'duration': 8,
+        'format': 'landscape',
+    }
+
+    too_few = client.post(
+        '/api/videos',
+        json={**base, 'versions': [1, 2]},
+    )
+    duplicate = client.post(
+        '/api/videos',
+        json={**base, 'versions': [1, 2, 2]},
+    )
+    too_many = client.post(
+        '/api/videos',
+        json={**base, 'versions': [1, 2, 3, 4, 5, 6]},
+    )
+    wrong_type = client.post(
+        '/api/videos',
+        json={**base, 'versions': '123'},
+    )
+    wrong_duration = client.post(
+        '/api/videos',
+        json={**base, 'versions': [1, 2, 3], 'duration': 6},
+    )
+
+    assert too_few.status_code == 400
+    assert too_few.get_json()['code'] == 'video_versions_invalid'
+    assert duplicate.status_code == 400
+    assert duplicate.get_json()['code'] == 'video_versions_invalid'
+    assert too_many.status_code == 400
+    assert too_many.get_json()['code'] == 'video_versions_invalid'
+    assert wrong_type.status_code == 400
+    assert wrong_type.get_json()['code'] == 'video_versions_invalid'
+    assert wrong_duration.status_code == 400
+    assert wrong_duration.get_json()['code'] == 'video_settings_invalid'
 
 
 def test_create_video_rejects_unsupported_duration(monkeypatch):
@@ -837,16 +974,104 @@ def test_video_poll_progress_then_saves_completed_mp4(monkeypatch):
     assert completed.get_json()['video_url'] == '/generated/walk.mp4'
 
 
+def test_sequence_video_poll_merges_completed_segments(monkeypatch):
+    session_id = make_video_session(versions=[1, 2, 3])
+    job_id = '1234567890abcdef'
+    session = street_app.SESSIONS[session_id]
+    session['video_jobs'][job_id] = {
+        'id': job_id,
+        'operation_name': 'operations/veo-1',
+        'operation_names': ['operations/veo-1', 'operations/veo-2'],
+        'status': 'queued',
+        'version': 3,
+        'versions': [1, 2, 3],
+        'mode': 'sequence',
+        'speed': 'natural',
+        'duration': 8,
+        'total_duration': 16,
+        'format': 'landscape',
+        'aspect_ratio': '16:9',
+        'video_url': '',
+        'error': '',
+        'created_at': time.time(),
+        'updated_at': time.time(),
+    }
+    video_files = {
+        'operations/veo-1': 'veo-file-1',
+        'operations/veo-2': 'veo-file-2',
+    }
+
+    class FakeOperations:
+        def get(self, operation):
+            return SimpleNamespace(
+                done=True,
+                error=None,
+                response=SimpleNamespace(generated_videos=[
+                    SimpleNamespace(video=video_files[operation.name]),
+                ]),
+            )
+
+    class FakeFiles:
+        def download(self, file):
+            return {
+                'veo-file-1': b'segment-one',
+                'veo-file-2': b'segment-two',
+            }[file]
+
+    merged = {}
+    monkeypatch.setattr(
+        street_app,
+        'client',
+        SimpleNamespace(
+            operations=FakeOperations(),
+            files=FakeFiles(),
+        ),
+    )
+    monkeypatch.setattr(
+        street_app,
+        '_concatenate_video_segments',
+        lambda segments: (
+            merged.update({'segments': segments})
+            or b'merged-mp4'
+        ),
+    )
+    monkeypatch.setattr(
+        street_app,
+        '_save_generated_video',
+        lambda session_id, job_id, video_bytes: (
+            merged.update({'video_bytes': video_bytes})
+            or '/generated/sequence.mp4'
+        ),
+    )
+
+    response = street_app.app.test_client().get(
+        f'/api/videos/{job_id}?session_id={session_id}',
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()['status'] == 'completed'
+    assert response.get_json()['total_duration'] == 16
+    assert merged['segments'] == [b'segment-one', b'segment-two']
+    assert merged['video_bytes'] == b'merged-mp4'
+
+
 def test_session_serialization_preserves_video_jobs():
     session_id = make_video_session()
     job_id = '1234567890abcdef'
     street_app.SESSIONS[session_id]['video_jobs'][job_id] = {
         'id': job_id,
         'operation_name': 'operations/veo-test',
+        'operation_names': [
+            'operations/veo-test',
+            'operations/veo-test-2',
+        ],
         'status': 'in_progress',
         'version': 3,
+        'versions': [1, 2, 3],
+        'mode': 'sequence',
         'speed': 'natural',
         'duration': 8,
+        'total_duration': 16,
         'format': 'landscape',
         'aspect_ratio': '16:9',
         'video_url': '',
@@ -863,6 +1088,12 @@ def test_session_serialization_preserves_video_jobs():
     assert restored['video_jobs'][job_id]['operation_name'] == (
         'operations/veo-test'
     )
+    assert restored['video_jobs'][job_id]['operation_names'] == [
+        'operations/veo-test',
+        'operations/veo-test-2',
+    ]
+    assert restored['video_jobs'][job_id]['versions'] == [1, 2, 3]
+    assert restored['video_jobs'][job_id]['total_duration'] == 16
     assert restored['versions'][0]['version'] == 3
 
 

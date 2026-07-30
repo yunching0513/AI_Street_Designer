@@ -3,6 +3,7 @@ google-genai>=1.75,<3
 openai>=2.48,<3
 python-dotenv>=1.0
 pillow>=10.0
+imageio-ffmpeg>=0.6,<1
 gunicorn>=21.0
 redis>=6.4,<9
 vercel_blob>=0.4

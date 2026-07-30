@@ -1164,6 +1164,47 @@ body {
 .version-strip::-webkit-scrollbar { height: 6px; }
 .version-strip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
+.image-download-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem;
+}
+
+.image-download-button {
+    min-height: 42px;
+    padding: 0.55rem 0.8rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.42rem;
+    border: 2px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: var(--surface);
+    color: var(--text-soft);
+    font: inherit;
+    font-size: 0.76rem;
+    font-weight: 800;
+    cursor: pointer;
+    transition: transform var(--transition), border-color var(--transition),
+                background var(--transition), opacity var(--transition);
+}
+
+.image-download-button-primary {
+    border-color: var(--primary-deep);
+    background: var(--primary-soft);
+    color: var(--primary-deep);
+}
+
+.image-download-button:not(:disabled):hover {
+    transform: translateY(-1px);
+    border-color: var(--primary-deep);
+}
+
+.image-download-button:disabled {
+    opacity: 0.42;
+    cursor: not-allowed;
+}
+
 .video-launcher {
     width: 100%;
     min-height: 68px;
@@ -1522,6 +1563,219 @@ body {
 .video-choice small {
     color: var(--text-soft);
     font-size: 0.7rem;
+}
+
+.video-source-modes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.65rem;
+}
+
+.video-source-mode {
+    position: relative;
+    min-width: 0;
+    padding: 0.8rem;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 0.65rem;
+    border: 2px solid var(--border-soft);
+    border-radius: var(--radius-lg);
+    background: rgba(255, 255, 255, 0.76);
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.video-source-mode > input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.video-source-mode > span:first-of-type {
+    font-size: 1.3rem;
+}
+
+.video-source-mode strong,
+.video-source-mode small {
+    display: block;
+}
+
+.video-source-mode strong {
+    font-size: 0.8rem;
+}
+
+.video-source-mode small {
+    margin-top: 0.15rem;
+    color: var(--text-soft);
+    font-size: 0.66rem;
+    line-height: 1.35;
+}
+
+.video-source-mode:has(input:checked) {
+    border-color: var(--primary-deep);
+    background: var(--primary-soft);
+    box-shadow: inset 0 0 0 1px var(--primary-deep);
+}
+
+.video-source-mode:has(input:focus-visible) {
+    outline: 3px solid var(--yellow);
+    outline-offset: 2px;
+}
+
+.video-source-mode:has(input:disabled) {
+    opacity: 0.42;
+    cursor: not-allowed;
+}
+
+.video-storyboard-panel {
+    margin-top: 0.75rem;
+    padding: 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-soft);
+}
+
+.video-storyboard-heading {
+    margin-bottom: 0.55rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-size: 0.74rem;
+}
+
+.video-storyboard-heading span {
+    color: var(--primary-deep);
+    font-weight: 800;
+}
+
+.video-storyboard-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(76px, 1fr));
+    gap: 0.45rem;
+}
+
+.storyboard-image-choice {
+    position: relative;
+    overflow: hidden;
+    aspect-ratio: 4 / 3;
+    border: 2px solid transparent;
+    border-radius: 12px;
+    background: var(--surface);
+    cursor: pointer;
+}
+
+.storyboard-image-choice input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.storyboard-image-choice img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+}
+
+.storyboard-image-choice span {
+    position: absolute;
+    right: 0.28rem;
+    bottom: 0.28rem;
+    min-width: 26px;
+    padding: 0.18rem 0.35rem;
+    border-radius: var(--radius-pill);
+    background: rgba(33, 31, 24, 0.78);
+    color: white;
+    font-size: 0.64rem;
+    font-weight: 900;
+    text-align: center;
+}
+
+.storyboard-image-choice:has(input:checked) {
+    border-color: var(--primary-deep);
+    box-shadow: 0 0 0 2px var(--primary-soft);
+}
+
+.storyboard-image-choice:has(input:checked)::after {
+    content: '✓';
+    position: absolute;
+    top: 0.28rem;
+    left: 0.28rem;
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--primary-deep);
+    color: white;
+    font-size: 0.68rem;
+    font-weight: 900;
+}
+
+.storyboard-image-choice:has(input:focus-visible) {
+    outline: 3px solid var(--yellow);
+    outline-offset: 2px;
+}
+
+.video-storyboard-order {
+    margin-top: 0.65rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.storyboard-order-chip {
+    display: inline-flex;
+    align-items: center;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: var(--surface);
+}
+
+.storyboard-order-chip strong {
+    padding: 0.35rem 0.48rem;
+    color: var(--primary-deep);
+    font-size: 0.7rem;
+}
+
+.storyboard-order-chip button {
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-left: 1px solid var(--border-soft);
+    background: transparent;
+    color: var(--text-soft);
+    font: inherit;
+    font-size: 0.68rem;
+    font-weight: 900;
+    cursor: pointer;
+}
+
+.storyboard-order-chip button:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+.video-storyboard-feedback {
+    min-height: 1.2em;
+    margin-top: 0.45rem;
+    color: var(--text-soft);
+    font-size: 0.69rem;
+    font-weight: 700;
+}
+
+.video-storyboard-feedback.is-error {
+    color: #A34D66;
+}
+
+.video-storyboard-note {
+    display: block;
+    margin-top: 0.4rem;
+    color: var(--text-soft);
+    font-size: 0.65rem;
+    line-height: 1.45;
 }
 
 .video-options-row {
@@ -2019,6 +2273,12 @@ body {
     }
     .comparison-label-before { left: 0.65rem; }
     .comparison-label-after { right: 0.65rem; }
+    .image-download-actions { gap: 0.4rem; }
+    .image-download-button {
+        min-height: 38px;
+        padding: 0.42rem 0.5rem;
+        font-size: 0.68rem;
+    }
     .video-launcher {
         min-height: 58px;
         padding: 0.6rem 0.75rem;
@@ -2059,6 +2319,10 @@ body {
     }
     .video-choice strong { font-size: 0.76rem; }
     .video-choice small { font-size: 0.63rem; }
+    .video-source-modes { grid-template-columns: 1fr; }
+    .video-storyboard-grid {
+        grid-template-columns: repeat(3, minmax(72px, 1fr));
+    }
     .video-options-row {
         grid-template-columns: 1fr;
         gap: 0.85rem;

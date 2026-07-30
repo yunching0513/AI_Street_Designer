@@ -278,6 +278,16 @@
                             <span class="comparison-handle">↔</span>
                         </div>
                     </div>
+                    <div class="image-download-actions" aria-label="圖片下載" data-i18n-aria-label="imageDownloads">
+                        <button class="image-download-button" id="download-original-image" type="button" disabled>
+                            <span aria-hidden="true">↙</span>
+                            <span data-i18n="downloadOriginalImage">下載原始圖片</span>
+                        </button>
+                        <button class="image-download-button image-download-button-primary" id="download-current-image" type="button" disabled>
+                            <span aria-hidden="true">↙</span>
+                            <span data-i18n="downloadCurrentImage">下載目前生成圖</span>
+                        </button>
+                    </div>
                     <div class="version-strip" id="version-strip"></div>
                     <button class="video-launcher" id="video-launcher" type="button" disabled>
                         <span class="video-launcher-icon" aria-hidden="true">🎬</span>
@@ -354,6 +364,38 @@
                     </div>
 
                     <form id="video-setup-form">
+                        <fieldset class="video-option-group">
+                            <legend data-i18n="videoSource">影片素材</legend>
+                            <div class="video-source-modes">
+                                <label class="video-source-mode">
+                                    <input type="radio" name="video-source-mode" value="single" checked>
+                                    <span aria-hidden="true">🖼️</span>
+                                    <span>
+                                        <strong data-i18n="videoSingleSource">讓目前版本動起來</strong>
+                                        <small data-i18n="videoSingleSourceSub">以目前顯示的圖片生成漫遊</small>
+                                    </span>
+                                </label>
+                                <label class="video-source-mode" id="video-sequence-mode">
+                                    <input type="radio" name="video-source-mode" value="sequence">
+                                    <span aria-hidden="true">🎞️</span>
+                                    <span>
+                                        <strong data-i18n="videoSequenceSource">串連 3–5 張版本</strong>
+                                        <small data-i18n="videoSequenceSourceSub">選圖並調整連貫順序</small>
+                                    </span>
+                                </label>
+                            </div>
+                            <div class="video-storyboard-panel hidden" id="video-storyboard-panel">
+                                <div class="video-storyboard-heading">
+                                    <strong data-i18n="videoStoryboardTitle">選擇要串連的圖片</strong>
+                                    <span id="video-storyboard-count">已選 0 / 3–5 張</span>
+                                </div>
+                                <div class="video-storyboard-grid" id="video-storyboard-options"></div>
+                                <div class="video-storyboard-order" id="video-storyboard-order"></div>
+                                <p class="video-storyboard-feedback" id="video-storyboard-feedback" aria-live="polite"></p>
+                                <small class="video-storyboard-note" data-i18n="videoStoryboardNote">每兩張相鄰圖片會各使用一次 Veo 生成額度，再合併成單一 MP4。圖片會固定每段首尾，實際過場仍由 Veo 自然補間。</small>
+                            </div>
+                        </fieldset>
+
                         <fieldset class="video-option-group">
                             <legend data-i18n="walkingPace">步行節奏</legend>
                             <div class="video-choice-grid video-speed-grid">

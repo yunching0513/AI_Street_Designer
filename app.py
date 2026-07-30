@@ -11,7 +11,9 @@ import os
 import re
 import resource
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -21,7 +23,7 @@ import uuid
 
 # Bumped by hand on each deploy-worthy change — /api/diag reports it, so we
 # can tell at a glance whether the running instance actually has a fix.
-CODE_VERSION = '2026-07-30-veo1'
+CODE_VERSION = '2026-07-30-storyboard1'
 
 def rss_mb():
     """Resident memory of this worker, in MB (Linux)."""
@@ -40,6 +42,7 @@ if sys.version_info < (3, 10):
     except ImportError:
         pass
 
+import imageio_ffmpeg
 from dotenv import load_dotenv
 from flask import Flask, Response, g, jsonify, render_template, request, url_for
 from google import genai
@@ -1282,10 +1285,14 @@ def _serialize_session(session):
             for key in (
                 'id',
                 'operation_name',
+                'operation_names',
                 'status',
                 'version',
+                'versions',
+                'mode',
                 'speed',
                 'duration',
+                'total_duration',
                 'format',
                 'aspect_ratio',
                 'video_url',
@@ -1376,10 +1383,30 @@ def _deserialize_session(raw):
         video_jobs[job_id] = {
             'id': job_id,
             'operation_name': str(job.get('operation_name') or ''),
+            'operation_names': [
+                str(name)
+                for name in (job.get('operation_names') or [])
+                if name
+            ][:4] or [str(job.get('operation_name') or '')],
             'status': str(job.get('status') or 'queued'),
             'version': int(job.get('version') or 1),
+            'versions': [
+                int(version)
+                for version in (job.get('versions') or [])
+                if str(version).isdigit()
+            ][:5] or [int(job.get('version') or 1)],
+            'mode': (
+                'sequence'
+                if job.get('mode') == 'sequence'
+                else 'single'
+            ),
             'speed': str(job.get('speed') or 'natural'),
             'duration': int(job.get('duration') or 8),
+            'total_duration': int(
+                job.get('total_duration')
+                or job.get('duration')
+                or 8
+            ),
             'format': str(job.get('format') or 'landscape'),
             'aspect_ratio': str(job.get('aspect_ratio') or '16:9'),
             'video_url': str(job.get('video_url') or ''),
@@ -1649,6 +1676,7 @@ EN_API_ERRORS = {
     'video_unavailable': 'Google Veo is not configured on the server.',
     'video_payload_invalid': 'The video request must be a JSON object.',
     'video_settings_invalid': 'Choose a supported duration, pace, and format.',
+    'video_versions_invalid': 'Choose 3 to 5 different image versions for a connected video.',
     'video_version_invalid': 'This image version is no longer available. Select a recent version.',
     'video_job_not_found': 'This video job does not exist or has expired.',
     'video_generation_failed': 'Google Veo could not generate this video. Please try again later.',
@@ -2571,7 +2599,14 @@ def _video_source_version(session, requested_version):
     return None
 
 
-def _video_prompt(speed):
+def _video_image(source):
+    return types.Image(
+        image_bytes=source['bytes'],
+        mime_type=source.get('mime_type', 'image/jpeg'),
+    )
+
+
+def _video_prompt(speed, versions=None):
     pace = {
         'gentle': (
             'Move forward at a very slow, relaxed strolling pace with '
@@ -2586,11 +2621,19 @@ def _video_prompt(speed):
             'stable and comfortable.'
         ),
     }[speed]
+    continuity = ''
+    if versions and len(versions) > 1:
+        version_path = ' -> '.join(f'v{version}' for version in versions)
+        continuity = (
+            ' Use the supplied first and last frames as fixed endpoints. '
+            f'Follow this intended progression: {version_path}. Smoothly connect '
+            'the street-design changes without sudden morphing or cuts.'
+        )
     return (
         'Create a photorealistic first-person pedestrian walk-through from '
         'this redesigned street image. Keep an eye-level camera on the '
         'sidewalk and travel naturally forward into the scene. '
-        f'{pace} Preserve the exact street design, building geometry, '
+        f'{pace}{continuity} Preserve the exact street design, building geometry, '
         'storefronts, trees, lanes, street furniture, signs, lighting, and '
         'perspective shown in the reference. Use continuous stabilized camera '
         'movement, realistic parallax, and subtle urban ambience. No cuts, no '
@@ -2599,13 +2642,69 @@ def _video_prompt(speed):
     )
 
 
+def _concatenate_video_segments(segment_bytes):
+    """Join compatible Veo MP4 segments without recompressing them."""
+    if len(segment_bytes) == 1:
+        return segment_bytes[0]
+    if not 2 <= len(segment_bytes) <= 4:
+        raise ValueError('expected 2 to 4 video segments')
+    ffmpeg_executable = imageio_ffmpeg.get_ffmpeg_exe()
+    with tempfile.TemporaryDirectory(prefix='street-video-') as temp_dir:
+        segment_paths = []
+        for index, video_bytes in enumerate(segment_bytes):
+            if not video_bytes:
+                raise ValueError('video segment is empty')
+            path = os.path.join(temp_dir, f'segment-{index}.mp4')
+            with open(path, 'wb') as output:
+                output.write(video_bytes)
+            segment_paths.append(path)
+        concat_path = os.path.join(temp_dir, 'segments.ffconcat')
+        with open(concat_path, 'w', encoding='utf-8') as manifest:
+            manifest.write('ffconcat version 1.0\n')
+            for path in segment_paths:
+                escaped_path = path.replace("'", "'\\''")
+                manifest.write(f"file '{escaped_path}'\n")
+        output_path = os.path.join(temp_dir, 'street-walkthrough.mp4')
+        completed = subprocess.run(
+            [
+                ffmpeg_executable,
+                '-hide_banner',
+                '-loglevel',
+                'error',
+                '-f',
+                'concat',
+                '-safe',
+                '0',
+                '-i',
+                concat_path,
+                '-c',
+                'copy',
+                '-movflags',
+                '+faststart',
+                '-y',
+                output_path,
+            ],
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.decode('utf-8', errors='replace')[-1000:]
+            raise RuntimeError(f'ffmpeg concat failed: {detail}')
+        with open(output_path, 'rb') as output:
+            return output.read()
+
+
 def _public_video_job(job):
     payload = {
         'job_id': job['id'],
         'status': job['status'],
         'version': job['version'],
+        'versions': job.get('versions') or [job['version']],
+        'mode': job.get('mode') or 'single',
         'speed': job['speed'],
         'duration': job['duration'],
+        'total_duration': job.get('total_duration') or job['duration'],
         'format': job['format'],
         'aspect_ratio': job['aspect_ratio'],
     }
@@ -2643,8 +2742,8 @@ def create_video():
             400,
             'session_id_invalid',
         )
+    mode = str(data.get('mode') or 'single')
     try:
-        version = int(data.get('version'))
         duration = int(data.get('duration'))
     except (TypeError, ValueError):
         return _api_error(
@@ -2652,10 +2751,49 @@ def create_video():
             400,
             'video_settings_invalid',
         )
+    if mode == 'sequence':
+        raw_versions = data.get('versions')
+        try:
+            video_versions = [
+                int(version)
+                for version in (
+                    raw_versions
+                    if isinstance(raw_versions, list)
+                    else []
+                )
+            ]
+        except (TypeError, ValueError):
+            video_versions = []
+        if (
+            len(video_versions) not in {3, 4, 5}
+            or len(set(video_versions)) != len(video_versions)
+            or any(version < 1 for version in video_versions)
+        ):
+            return _api_error(
+                '請選擇 3 到 5 個不同的圖片版本來製作連貫影片。',
+                400,
+                'video_versions_invalid',
+            )
+    elif mode == 'single':
+        try:
+            video_versions = [int(data.get('version'))]
+        except (TypeError, ValueError):
+            return _api_error(
+                '請選擇支援的影片長度、步行節奏與畫面比例。',
+                400,
+                'video_settings_invalid',
+            )
+    else:
+        return _api_error(
+            '請選擇支援的影片素材模式。',
+            400,
+            'video_settings_invalid',
+        )
     speed = str(data.get('speed') or '')
     video_format = str(data.get('format') or '')
     if (
         duration not in {4, 6, 8}
+        or (mode == 'sequence' and duration != 8)
         or speed not in {'gentle', 'natural', 'brisk'}
         or video_format not in {'landscape', 'portrait'}
     ):
@@ -2683,48 +2821,76 @@ def create_video():
 
     try:
         session = _refresh_persisted_session(session_id, session)
-        source = _video_source_version(session, version)
-        if not source:
+        sources = [
+            _video_source_version(session, version)
+            for version in video_versions
+        ]
+        if any(source is None for source in sources):
             return _api_error(
                 '這個圖片版本已不在工作階段中，請選擇較新的版本。',
                 404,
                 'video_version_invalid',
             )
         aspect_ratio = '9:16' if video_format == 'portrait' else '16:9'
-        operation = client.models.generate_videos(
-            model=VEO_VIDEO_MODEL,
-            prompt=_video_prompt(speed),
-            image=types.Image(
-                image_bytes=source['bytes'],
-                mime_type=source.get('mime_type', 'image/jpeg'),
+        config_kwargs = {
+            'number_of_videos': 1,
+            'duration_seconds': duration,
+            'aspect_ratio': aspect_ratio,
+            'resolution': '720p',
+            'generate_audio': True,
+            'person_generation': 'allow_adult',
+            'enhance_prompt': True,
+            'negative_prompt': (
+                'warped buildings, morphing signs, jump cuts, camera shake, '
+                'new vehicles, close-up faces, children, duplicated objects, '
+                'text distortion'
             ),
-            config=types.GenerateVideosConfig(
-                number_of_videos=1,
-                duration_seconds=duration,
-                aspect_ratio=aspect_ratio,
-                resolution='720p',
-                generate_audio=True,
-                person_generation='allow_adult',
-                enhance_prompt=True,
-                negative_prompt=(
-                    'warped buildings, morphing signs, jump cuts, camera shake, '
-                    'new vehicles, close-up faces, children, duplicated objects, '
-                    'text distortion'
-                ),
-            ),
-        )
-        operation_name = str(getattr(operation, 'name', '') or '')
-        if not operation_name:
-            raise RuntimeError('Veo did not return an operation name')
+        }
+        operation_names = []
+        if mode == 'sequence':
+            transitions = zip(
+                sources[:-1],
+                sources[1:],
+                video_versions[:-1],
+                video_versions[1:],
+            )
+        else:
+            transitions = [
+                (sources[0], None, video_versions[0], None)
+            ]
+        for first_source, last_source, first_version, last_version in transitions:
+            segment_config = dict(config_kwargs)
+            segment_versions = [first_version]
+            if last_source is not None:
+                segment_config['last_frame'] = _video_image(last_source)
+                segment_versions.append(last_version)
+            operation = client.models.generate_videos(
+                model=VEO_VIDEO_MODEL,
+                prompt=_video_prompt(speed, segment_versions),
+                image=_video_image(first_source),
+                config=types.GenerateVideosConfig(**segment_config),
+            )
+            operation_name = str(getattr(operation, 'name', '') or '')
+            if not operation_name:
+                raise RuntimeError('Veo did not return an operation name')
+            operation_names.append(operation_name)
         now = time.time()
         job_id = uuid.uuid4().hex[:16]
         job = {
             'id': job_id,
-            'operation_name': operation_name,
+            'operation_name': operation_names[0],
+            'operation_names': operation_names,
             'status': 'queued',
-            'version': version,
+            'version': video_versions[-1],
+            'versions': video_versions,
+            'mode': mode,
             'speed': speed,
             'duration': duration,
+            'total_duration': (
+                duration * (len(video_versions) - 1)
+                if mode == 'sequence'
+                else duration
+            ),
             'format': video_format,
             'aspect_ratio': aspect_ratio,
             'video_url': '',
@@ -2799,40 +2965,55 @@ def get_video(job_id):
         if job['status'] in {'completed', 'failed'}:
             return jsonify(_public_video_job(job))
 
-        operation = client.operations.get(
-            types.GenerateVideosOperation(
-                name=job['operation_name'],
+        operation_names = job.get('operation_names') or [
+            job['operation_name']
+        ]
+        operations = [
+            client.operations.get(
+                types.GenerateVideosOperation(name=operation_name)
             )
-        )
+            for operation_name in operation_names
+        ]
         now = time.time()
         job['updated_at'] = now
-        if not getattr(operation, 'done', False):
-            job['status'] = 'in_progress'
-            session['updated_at'] = now
-            return jsonify(_public_video_job(job))
-
-        operation_error = getattr(operation, 'error', None)
-        if operation_error:
+        operation_errors = [
+            getattr(operation, 'error', None)
+            for operation in operations
+            if getattr(operation, 'error', None)
+        ]
+        if operation_errors:
             job['status'] = 'failed'
             job['error'] = (
                 'Google Veo 無法完成這支影片，請調整設定後再試。'
             )
             session['updated_at'] = now
-            print(f'[{g.request_id}] Veo operation failed: {operation_error}')
+            print(
+                f'[{g.request_id}] Veo operation failed: '
+                f'{operation_errors[0]}'
+            )
             return jsonify(_public_video_job(job))
-
-        response = getattr(operation, 'response', None)
-        generated_videos = getattr(response, 'generated_videos', None) or []
-        if not generated_videos:
-            job['status'] = 'failed'
-            job['error'] = 'Google Veo 完成任務，但沒有回傳影片。'
+        if not all(getattr(operation, 'done', False) for operation in operations):
+            job['status'] = 'in_progress'
             session['updated_at'] = now
             return jsonify(_public_video_job(job))
 
-        video_file = generated_videos[0].video
-        video_bytes = client.files.download(file=video_file)
-        if not video_bytes:
-            raise RuntimeError('Veo video download was empty')
+        segment_bytes = []
+        for operation in operations:
+            response = getattr(operation, 'response', None)
+            generated_videos = (
+                getattr(response, 'generated_videos', None) or []
+            )
+            if not generated_videos:
+                job['status'] = 'failed'
+                job['error'] = 'Google Veo 完成任務，但沒有回傳影片。'
+                session['updated_at'] = now
+                return jsonify(_public_video_job(job))
+            video_file = generated_videos[0].video
+            downloaded = client.files.download(file=video_file)
+            if not downloaded:
+                raise RuntimeError('Veo video download was empty')
+            segment_bytes.append(downloaded)
+        video_bytes = _concatenate_video_segments(segment_bytes)
         job['video_url'] = _save_generated_video(
             session_id,
             job_id,
