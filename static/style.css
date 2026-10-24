@@ -3040,3 +3040,89 @@ body {
         min-height: 190px;
     }
 }
+
+/* =====================================================================
+   Responsive layout pass (desktop · iPad · phone)
+   ===================================================================== */
+
+/* Grid and flex children must be allowed to shrink below their content
+   width; without this a long <select> option or placeholder pushes the
+   whole card past the right edge on phones. */
+.container { min-width: 0; }
+.app-interface { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.app-interface > *,
+.controls-section,
+.control-group,
+.input-wrapper > *,
+.participation-grid > * { min-width: 0; }
+#resolution-select { max-width: 100%; }
+#custom-prompt { text-overflow: ellipsis; }
+
+/* Desktop and iPad landscape: two columns, the photo stays in view while
+   the settings column scrolls, and the drop zone no longer stretches to
+   the full height of the settings column. */
+@media (min-width: 861px) {
+    .app-interface {
+        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+        align-items: start;
+    }
+    .upload-section {
+        position: sticky;
+        top: 1.5rem;
+        min-height: 320px;
+        aspect-ratio: 4 / 3;
+        max-height: calc(100vh - 3rem);
+    }
+}
+
+/* iPad portrait and large phones: one column, photo area sized to the
+   screen instead of a fixed height. */
+@media (max-width: 860px) {
+    .app-interface { grid-template-columns: minmax(0, 1fr); }
+    .upload-section { min-height: 0; height: clamp(240px, 42vh, 420px); }
+}
+
+/* Touch screens: 44px tap targets for chips, toggles and small buttons. */
+@media (pointer: coarse) {
+    .segmented-options span,
+    .check-chip-grid span {
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        padding: 0.55rem 0.9rem;
+        font-size: 0.82rem;
+    }
+    .language-switch button { min-height: 40px; }
+    .remove-btn { width: 44px; height: 44px; }
+    .mask-toggle { min-height: 44px; display: flex; align-items: center; gap: 0.5rem; }
+}
+
+/* Phones: tighter card padding, and the main action button pinned to the
+   bottom of the screen once it is usable, so nobody has to scroll back up
+   to find it. It returns to normal flow while the design plan is shown,
+   which has its own confirm button. */
+@media (max-width: 640px) {
+    .container { padding-left: 0.75rem; padding-right: 0.75rem; }
+    .app-interface { padding: 0.9rem; border-radius: var(--radius-lg); }
+    .upload-section { height: clamp(220px, 34vh, 320px); }
+    .option-card { min-height: 88px; justify-content: center; }
+    .input-wrapper span { overflow-wrap: anywhere; }
+
+    #generate-btn:not(:disabled) {
+        position: fixed;
+        left: 0.75rem;
+        right: 0.75rem;
+        bottom: calc(0.75rem + env(safe-area-inset-bottom));
+        width: auto;
+        min-height: 52px;
+        z-index: 20;
+        box-shadow: 0 10px 28px rgba(60, 80, 50, 0.28);
+    }
+    .container:has(#generate-btn:not(:disabled)) {
+        padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+    }
+    .container:has(#design-plan-panel:not(.hidden)) #generate-btn {
+        position: static;
+        box-shadow: none;
+    }
+}
