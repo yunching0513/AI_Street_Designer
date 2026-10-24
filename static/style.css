@@ -3041,8 +3041,7 @@ body {
     }
 }
 
-/* =====================================================================
-   Responsive layout pass (desktop · iPad · phone)
+/* ==============================================================   Responsive layout pass (desktop · iPad · phone)
    ===================================================================== */
 
 /* Grid and flex children must be allowed to shrink below their content
@@ -3126,3 +3125,84 @@ body {
         box-shadow: none;
     }
 }
+=======
+/* ===== Demo access code dialog ===== */
+.access-dialog {
+    width: min(92vw, 420px);
+    margin: auto;
+    padding: 0;
+    border: 2px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow-pop);
+}
+.access-dialog::backdrop {
+    background: rgba(40, 46, 36, 0.45);
+    backdrop-filter: blur(4px);
+}
+.access-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1.5rem;
+    text-align: center;
+}
+.access-icon { font-size: 2rem; }
+.access-title {
+    font-family: 'Varela Round', 'Huninn', sans-serif;
+    font-size: 1.2rem;
+    margin: 0;
+}
+.access-body,
+.access-request {
+    margin: 0;
+    color: var(--text-soft);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+.access-input {
+    width: 100%;
+    min-height: 48px;
+    padding: 0.7rem 1rem;
+    border: 2px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: var(--surface);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 16px;
+    text-align: center;
+}
+.access-input:focus {
+    outline: none;
+    border-color: var(--primary-deep);
+}
+.access-error {
+    margin: 0;
+    color: #B4442F;
+    font-size: 0.85rem;
+}
+.access-actions {
+    display: flex;
+    gap: 0.6rem;
+}
+.access-actions button {
+    flex: 1;
+    min-height: 48px;
+    border-radius: var(--radius-pill);
+    font-family: inherit;
+    font-weight: 700;
+    font-size: 0.95rem;
+    cursor: pointer;
+}
+.access-cancel {
+    border: 2px solid var(--border);
+    background: var(--surface);
+    color: var(--text-soft);
+}
+.access-submit {
+    border: none;
+    background: var(--primary);
+    color: white;
+}
+.access-submit:disabled { opacity: 0.6; cursor: wait; }

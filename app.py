@@ -1,4 +1,5 @@
 import base64
+import functools
 import gc
 import glob
 import hashlib
@@ -1648,6 +1649,8 @@ def _refresh_persisted_session(session_id, fallback_session):
 
 
 EN_API_ERRORS = {
+    'access_code_required': 'An access code is required to use the AI generation features.',
+    'access_code_invalid': 'That access code is not correct.',
     'design_plan_invalid': 'The design-plan request must be a JSON object.',
     'prompt_required': 'Describe the street transformation you would like to create.',
     'prompt_too_long': f'The transformation description cannot exceed {MAX_PROMPT_CHARS} characters.',
@@ -1740,6 +1743,48 @@ def _api_error(message, status, code, retry_after=None):
     if retry_after is not None:
         response.headers['Retry-After'] = str(retry_after)
     return response
+
+
+# ===== Demo access code =====
+# The pages and the gallery stay public. Endpoints that spend money on AI
+# providers (image generation, co-design chat, video) require an access code
+# when SITE_ACCESS_CODE is set. A correct code sets an HttpOnly cookie that is
+# an HMAC of the code, so changing the code in Vercel invalidates old cookies.
+SITE_ACCESS_CODE = os.getenv('SITE_ACCESS_CODE', '').strip()
+ACCESS_COOKIE_NAME = 'aisd_access'
+ACCESS_COOKIE_MAX_AGE = 30 * 24 * 3600
+MAX_ACCESS_ATTEMPTS_PER_10_MIN = 10
+
+
+def _access_token():
+    return hmac.new(
+        SITE_ACCESS_CODE.encode('utf-8'),
+        b'aisd-access-v1',
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _has_access():
+    if not SITE_ACCESS_CODE:
+        return True
+    cookie = request.cookies.get(ACCESS_COOKIE_NAME, '')
+    return hmac.compare_digest(
+        cookie.encode('utf-8'),
+        _access_token().encode('utf-8'),
+    )
+
+
+def require_access_code(view):
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        if not _has_access():
+            return _api_error(
+                '需要通行碼才能使用 AI 生成功能。',
+                401,
+                'access_code_required',
+            )
+        return view(*args, **kwargs)
+    return wrapped
 
 
 def _openai_generation_error(error):
@@ -1957,6 +2002,44 @@ def create_design_plan():
     })
 
 
+@app.route('/api/access', methods=['GET'])
+def access_status():
+    return jsonify({
+        'required': bool(SITE_ACCESS_CODE),
+        'granted': _has_access(),
+    })
+
+
+@app.route('/api/access', methods=['POST'])
+def verify_access_code():
+    if not SITE_ACCESS_CODE:
+        return jsonify({'status': 'success', 'required': False})
+    rate_error = _check_rate_limit(
+        'access_code',
+        MAX_ACCESS_ATTEMPTS_PER_10_MIN,
+        600,
+    )
+    if rate_error is not None:
+        return rate_error
+    payload = request.get_json(silent=True) or {}
+    code = str(payload.get('code', '')).strip()
+    if not code or not hmac.compare_digest(
+        code.encode('utf-8'),
+        SITE_ACCESS_CODE.encode('utf-8'),
+    ):
+        return _api_error('通行碼不正確。', 403, 'access_code_invalid')
+    response = jsonify({'status': 'success'})
+    response.set_cookie(
+        ACCESS_COOKIE_NAME,
+        _access_token(),
+        max_age=ACCESS_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=request.is_secure,
+        samesite='Lax',
+    )
+    return response
+
+
 @app.route('/health')
 def health():
     """Lightweight liveness endpoint for Render health checks."""
@@ -2126,6 +2209,7 @@ def fetch_street():
         )
 
 @app.route('/api/transform', methods=['POST'])
+@require_access_code
 def transform_image():
     rate_error = _check_rate_limit(
         'transform',
@@ -2401,6 +2485,7 @@ The result should look like the same street, same buildings, same view - just wi
 
 
 @app.route('/api/chat', methods=['POST'])
+@require_access_code
 def chat_with_copilot():
     """Co-pilot dialogue endpoint: classifies intent, optionally refines the image."""
     rate_error = _check_rate_limit(
@@ -3160,6 +3245,7 @@ def _public_video_job(job):
 
 
 @app.route('/api/videos', methods=['POST'])
+@require_access_code
 def create_video():
     """Start an asynchronous Google Veo image-to-video operation."""
     rate_error = _check_rate_limit('video', MAX_VIDEOS_PER_DAY, 86_400)
