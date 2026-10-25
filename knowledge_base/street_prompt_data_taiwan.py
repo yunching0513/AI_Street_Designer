@@ -103,6 +103,15 @@ TAIWAN_STREET_DESIGN_DICT = {
         "manual_ref": "手冊 3.2.3 公共設施帶：將植栽與街道設施集中配置，保留連續淨寬。"
     },
 
+    "減少汽機車與道路空間重分配 (Reduced Motor Traffic)": {
+        "en_name": "Reduced Private Motor Traffic and People-First Street",
+        "set_typology": "Re-purposing Entire Streets",
+        "description": "Remove most visible private cars and scooters from moving lanes and curbside parking while retaining limited, realistic access for essential vehicles. Reclaim the freed road and parking space for wider pedestrian areas, safe cycling, greenery, seating, and public activity without altering existing buildings.",
+        "keywords": "very few private cars, very few scooters, reduced traffic lanes, no curbside vehicle clutter, people-first street, reclaimed road space, pedestrians, cyclists, street trees, seating, Taiwan streetscape",
+        "negative_prompt": "traffic jam, rows of parked scooters, cars covering the street, motorcycles on sidewalks, unchanged vehicle-dominated road, blocked emergency access, unrealistic completely empty highway",
+        "manual_ref": "人本交通原則：透過交通管理與道路空間重分配，降低私人運具對街道空間的占用，並保留必要通行與救災需求。"
+    },
+
     # ------------------------------------------------------------------
     # Category 3: 寧靜區與通學巷 (Entire Street / Traffic Calming)
     # ------------------------------------------------------------------

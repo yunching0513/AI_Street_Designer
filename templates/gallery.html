@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>街景成果牆｜AI Street Designer</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%2362A968'/%3E%3Cpath d='M50 76V39M49 50C33 50 24 40 24 25c16 0 25 9 25 25Zm2-7c2-15 11-22 26-21-1 14-10 22-26 21Z' fill='none' stroke='white' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Huninn&family=Varela+Round&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="gallery-page">
+    <main class="gallery-shell">
+        <header class="gallery-header">
+            <a class="gallery-brand" href="/" aria-label="AI Street Designer 首頁" data-i18n-aria-label="homeAria">
+                <span aria-hidden="true">🌱</span>
+                <strong>Street<span>Designer</span></strong>
+            </a>
+            <nav class="gallery-header-actions" aria-label="主要導覽" data-i18n-aria-label="primaryNav">
+                <a class="gallery-home-link" href="/" data-i18n="createDesign">＋ 創作我的街道</a>
+                <div class="language-switch" role="group" aria-label="Language">
+                    <button type="button" data-language="zh-TW" aria-pressed="true">中文</button>
+                    <button type="button" data-language="en" aria-pressed="false">EN</button>
+                </div>
+            </nav>
+        </header>
+
+        <section class="gallery-hero" aria-labelledby="gallery-title">
+            <div class="gallery-hero-copy">
+                <span class="gallery-kicker" data-i18n="kicker">COMMUNITY STREET IDEAS</span>
+                <h1 id="gallery-title" data-i18n="title">大家想像中的好街道</h1>
+                <p data-i18n="intro">看看使用者與小綠共同完成的街道改造成果，也用一個喜歡，告訴我們哪些設計最打動你。</p>
+            </div>
+            <div class="gallery-stats" aria-label="成果牆統計" data-i18n-aria-label="statsAria">
+                <div>
+                    <strong id="gallery-work-count">—</strong>
+                    <span data-i18n="works">公開成果</span>
+                </div>
+                <div>
+                    <strong id="gallery-like-count">—</strong>
+                    <span data-i18n="likes">累積喜歡</span>
+                </div>
+            </div>
+        </section>
+
+        <aside class="gallery-privacy-note">
+            <span aria-hidden="true">🛡️</span>
+            <p><strong data-i18n="privacyTitle">由創作者自願分享</strong><br><span data-i18n="privacyBody">這裡只顯示使用者選擇公開的生成成果；原始上傳照片不會出現在成果牆。</span></p>
+        </aside>
+
+        <section class="gallery-content" aria-labelledby="gallery-feed-title">
+            <div class="gallery-toolbar">
+                <div>
+                    <span class="gallery-section-label" data-i18n="browse">瀏覽作品</span>
+                    <h2 id="gallery-feed-title" data-i18n="feedTitle">街道共創成果</h2>
+                </div>
+                <div class="gallery-sort" role="group" aria-label="成果排序" data-i18n-aria-label="sortAria">
+                    <button type="button" data-sort="latest" aria-pressed="true" data-i18n="latest">最新分享</button>
+                    <button type="button" data-sort="popular" aria-pressed="false" data-i18n="popular">最多喜歡</button>
+                </div>
+            </div>
+
+            <p class="gallery-feedback-note" data-i18n="feedbackNote">看到喜歡的成果，就按下「我喜歡這個街景設計！」</p>
+            <div class="gallery-grid" id="gallery-grid" aria-live="polite"></div>
+            <div class="gallery-state" id="gallery-state">
+                <span class="gallery-state-icon" aria-hidden="true">🌿</span>
+                <strong data-i18n="loading">正在整理大家的街道作品…</strong>
+            </div>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='gallery.js') }}"></script>
+</body>
+</html>
