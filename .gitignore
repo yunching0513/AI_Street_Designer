@@ -9,6 +9,7 @@ service-account-key.json
 *.json
 !package.json
 !package-lock.json
+!knowledge_base/street_skill/*.json
 
 
 # Python
@@ -27,4 +28,3 @@ static/generated/*
 
 # Mac
 .DS_Store
-
